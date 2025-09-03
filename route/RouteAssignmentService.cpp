@@ -40,6 +40,7 @@ RouteAssignmentService::RouteAssignmentService(QObject* parent)
         this,
         &RouteAssignmentService::performMaintenanceCheck
     );
+    initializeHardcodedRoutes();
 }
 
 RouteAssignmentService::~RouteAssignmentService() {
@@ -160,64 +161,103 @@ QString RouteAssignmentService::requestRoute(
     const QString& requestedBy,
     const QVariantMap& trainData,
     const QString& priority
-) {
+    ) {
     m_totalRequests++;
 
+    // =====================================
+    // BASIC VALIDATION (Keep existing)
+    // =====================================
     if (!m_isOperational) {
+        qWarning() << "❌ Route request rejected - service not operational";
         return QString();
     }
 
-    if (!canAcceptNewRequests()) {
-        emit systemOverloaded(m_requestQueue.size(), m_maxConcurrentRoutes);
-        return QString();
-    }
-
-    // Create route request
-    RouteRequest request;
-    request.requestId = QUuid::createUuid();
-    request.sourceSignalId = sourceSignalId;
-    request.destSignalId = destSignalId;
-    request.direction = direction;
-    request.requestedBy = requestedBy;
-    request.priority = priority;
-    request.requestedAt = QDateTime::currentDateTime();
-    request.trainData = trainData;
-    request.reason = "Normal route request";
-
-    // Basic validation
     if (!isValidSignalId(sourceSignalId) || !isValidSignalId(destSignalId)) {
+        qWarning() << "❌ Route request rejected - invalid signal IDs";
         return QString();
     }
 
     if (!isValidDirection(direction)) {
+        qWarning() << "❌ Route request rejected - invalid direction";
         return QString();
     }
 
-    // Add to queue
-    addToQueue(request);
+    // =====================================
+    // GENERATE ROUTE ID
+    // =====================================
+    QString routeId = QUuid::createUuid().toString();
 
-    // Persist request
-    persistRouteRequest(request);
+    qDebug() << "🚀 [HARDCODED_ROUTE] Processing route request:";
+    qDebug() << "   📍 Route ID:" << routeId;
+    qDebug() << "   🚦 From:" << sourceSignalId << "→" << destSignalId;
+    qDebug() << "   👤 Requested by:" << requestedBy;
 
-    emit routeRequested(request.key(), sourceSignalId, destSignalId);
-    emit requestQueueChanged();
+    // =====================================
+    // FIND HARDCODED ROUTE
+    // =====================================
+    QElapsedTimer timer;
+    timer.start();
 
-    // Record metrics
-    if (m_telemetryService) {
-        m_telemetryService->recordOperationalMetric(
-            "route_requests_total",
-            m_totalRequests,
-            "count"
-        );
+    HardcodedRoute hardcodedRoute = findHardcodedRoute(sourceSignalId, destSignalId);
 
-        m_telemetryService->recordOperationalMetric(
-            "pending_requests",
-            m_requestQueue.size(),
-            "count"
-        );
+    if (hardcodedRoute.reachability == "BLOCKED") {
+        qWarning() << "❌ Route blocked:" << hardcodedRoute.blockedReason;
+
+        // Emit failure signal
+        emit routeFailed(routeId, hardcodedRoute.blockedReason);
+
+        m_failedRoutes++;
+        return QString();  // Return empty string to indicate failure
     }
 
-    return request.key();
+    // =====================================
+    // SIMULATE PROCESSING TIME
+    // =====================================
+    // Sleep for realistic processing time (optional)
+    QThread::msleep(static_cast<unsigned long>(hardcodedRoute.simulatedProcessingTime));
+
+    // =====================================
+    // APPLY HARDCODED ROUTE CHANGES
+    // =====================================
+    bool routeSuccess = applyHardcodedRoute(routeId, hardcodedRoute, requestedBy);
+
+    double totalTime = timer.elapsed();
+
+    if (routeSuccess) {
+        qDebug() << "✅ [HARDCODED_ROUTE] Route established successfully!";
+        qDebug() << "   ⏱️ Total time:" << totalTime << "ms";
+        qDebug() << "   🛤️ Path:" << hardcodedRoute.path.join(" → ");
+        qDebug() << "   🚦 Signals set:" << hardcodedRoute.signalAspects.keys();
+        qDebug() << "   🔧 Point machines:" << hardcodedRoute.pointMachineSettings.keys();
+
+        // Emit success signal
+        emit routeAssigned(routeId, sourceSignalId, destSignalId, hardcodedRoute.path);
+
+        m_successfulRoutes++;
+
+        // Update metrics
+        if (m_telemetryService) {
+            m_telemetryService->recordPerformanceMetric(
+                "route_processing_hardcoded",
+                totalTime,
+                true,
+                routeId,
+                QVariantMap{
+                    {"sourceSignal", sourceSignalId},
+                    {"destSignal", destSignalId},
+                    {"pathLength", hardcodedRoute.path.size()},
+                    {"overlapCount", hardcodedRoute.overlapCircuits.size()}
+                }
+                );
+        }
+
+        return routeId;
+    } else {
+        qCritical() << "❌ [HARDCODED_ROUTE] Failed to apply route changes";
+        emit routeFailed(routeId, "ROUTE_APPLICATION_FAILED");
+        m_failedRoutes++;
+        return QString();
+    }
 }
 
 void RouteAssignmentService::addToQueue(const RouteRequest& request) {
@@ -1681,6 +1721,176 @@ int RouteAssignmentService::convertPriorityToInt(const QString& priorityStr) con
                    << "- using default priority 100";
         return 100;         // Safe default
     }
+}
+
+void RouteAssignmentService::initializeHardcodedRoutes() {
+
+    // =====================================
+    // DEFINE YOUR HARDCODED ROUTES HERE
+    // =====================================
+
+    // Helper lambda to create routes easily
+    auto createRoute = [](const QString& source, const QString& dest,
+                          const QStringList& path, const QStringList& overlap,
+                          const QVariantMap& signals, const QVariantMap& pointMachines,
+                          const QString& reachability = "SUCCESS",
+                          const QString& blockedReason = "",
+                          double processingTime = 50.0) -> HardcodedRoute {
+        HardcodedRoute route;
+        route.sourceSignalId = source;
+        route.destSignalId = dest;
+        route.path = path;
+        route.overlapCircuits = overlap;
+        route.signalAspects = signals;
+        route.pointMachineSettings = pointMachines;
+        route.reachability = reachability;
+        route.blockedReason = blockedReason;
+        route.simulatedProcessingTime = processingTime;
+        return route;
+    };
+
+    // =====================================
+    // ROUTE DEFINITIONS
+    // =====================================
+
+    // Route 1: HM001 → ST001 (Simple route)
+    m_hardcodedRoutes.routes.append(createRoute(
+        "HM001", "ST001",
+        QStringList{"TC01", "TC02", "TC03", "TC04"},           // Path
+        QStringList{"TC05", "TC06"},                           // Overlap
+        QVariantMap{{"HM001", "GREEN"}, {"ST001", "RED"}},     // Signal aspects
+        QVariantMap{{"PM001", "NORMAL"}},                      // Point machines
+        "SUCCESS", "", 45.0
+        ));
+
+    // Route 2: HM001 → ST002 (Requires PM movement)
+    m_hardcodedRoutes.routes.append(createRoute(
+        "HM001", "ST002",
+        QStringList{"TC01", "TC02", "TC07", "TC08", "TC09"},
+        QStringList{"TC10", "TC11"},
+        QVariantMap{{"HM001", "GREEN"}, {"ST002", "RED"}, {"SIG_INTERMEDIATE", "YELLOW"}},
+        QVariantMap{{"PM001", "REVERSE"}, {"PM002", "NORMAL"}},
+        "SUCCESS", "", 75.0
+        ));
+
+    // Route 3: HM001 → ST003 (Blocked route)
+    m_hardcodedRoutes.routes.append(createRoute(
+        "HM001", "ST003",
+        QStringList{},  // Empty path for blocked
+        QStringList{},  // Empty overlap for blocked
+        QVariantMap{},  // No signal changes for blocked
+        QVariantMap{},  // No PM changes for blocked
+        "BLOCKED", "CIRCUIT_OCCUPIED_TC15", 25.0
+        ));
+
+    // Route 4: ST001 → AS001 (Starter to Advanced Starter)
+    m_hardcodedRoutes.routes.append(createRoute(
+        "ST001", "AS001",
+        QStringList{"TC12", "TC13", "TC14"},
+        QStringList{"TC15"},
+        QVariantMap{{"ST001", "GREEN"}, {"AS001", "RED"}},
+        QVariantMap{},  // No PM changes needed
+        "SUCCESS", "", 35.0
+        ));
+
+    // ADD MORE ROUTES AS NEEDED FOR YOUR DEMO...
+
+    // =====================================
+    // INDEX ROUTES BY SOURCE SIGNAL
+    // =====================================
+    for (const auto& route : m_hardcodedRoutes.routes) {
+        m_hardcodedRoutes.routesBySource[route.sourceSignalId].append(route);
+    }
+
+    qDebug() << "✅ Initialized" << m_hardcodedRoutes.routes.size() << "hardcoded routes";
+}
+
+HardcodedRoute RouteAssignmentService::findHardcodedRoute(const QString& sourceId, const QString& destId) {
+    // Search for matching route
+    for (const auto& route : m_hardcodedRoutes.routes) {
+        if (route.sourceSignalId == sourceId && route.destSignalId == destId) {
+            return route;
+        }
+    }
+
+    // Return empty route if not found
+    HardcodedRoute emptyRoute;
+    emptyRoute.reachability = "BLOCKED";
+    emptyRoute.blockedReason = "ROUTE_NOT_DEFINED";
+    return emptyRoute;
+}
+
+bool RouteAssignmentService::applyHardcodedRoute(const QString& routeId, const HardcodedRoute& route, const QString& operatorId) {
+
+    qDebug() << "🔧 [HARDCODED_ROUTE] Applying route changes for:" << routeId;
+
+    // =====================================
+    // STEP 1: SET SIGNAL ASPECTS
+    // =====================================
+    for (auto it = route.signalAspects.begin(); it != route.signalAspects.end(); ++it) {
+        QString signalId = it.key();
+        QString aspect = it.value().toString();
+
+        qDebug() << "   🚦 Setting signal" << signalId << "to" << aspect;
+
+        // Apply signal change via database or direct service call
+        if (m_dbManager) {
+            bool success = m_dbManager->updateSignalAspect(signalId, aspect, operatorId);
+            if (!success) {
+                qCritical() << "❌ Failed to set signal" << signalId << "to" << aspect;
+                return false;
+            }
+        }
+    }
+
+    // =====================================
+    // STEP 2: MOVE POINT MACHINES
+    // =====================================
+    for (auto it = route.pointMachineSettings.begin(); it != route.pointMachineSettings.end(); ++it) {
+        QString machineId = it.key();
+        QString position = it.value().toString();
+
+        qDebug() << "   🔧 Moving point machine" << machineId << "to" << position;
+
+        // Apply PM change via database or direct service call
+        if (m_dbManager) {
+            bool success = m_dbManager->updatePointMachinePosition(machineId, position, operatorId);
+            if (!success) {
+                qCritical() << "❌ Failed to move point machine" << machineId << "to" << position;
+                return false;
+            }
+        }
+    }
+
+    // =====================================
+    // STEP 3: PERSIST ROUTE ASSIGNMENT
+    // =====================================
+    if (m_dbManager) {
+        QVariantMap routeData;
+        routeData["route_id"] = routeId;
+        routeData["source_signal_id"] = route.sourceSignalId;
+        routeData["dest_signal_id"] = route.destSignalId;
+        routeData["path"] = route.path;
+        routeData["overlap_circuits"] = route.overlapCircuits;
+        routeData["requested_by"] = operatorId;
+        routeData["assigned_at"] = QDateTime::currentDateTime();
+        routeData["status"] = "ACTIVE";
+
+        bool persistSuccess = m_dbManager->persistRouteAssignment(routeData);
+        if (!persistSuccess) {
+            qWarning() << "⚠️ Failed to persist route assignment - continuing anyway";
+        }
+    }
+
+    // =====================================
+    // STEP 4: SETUP OVERLAP MONITORING (Optional)
+    // =====================================
+    if (!route.overlapCircuits.isEmpty()) {
+        qDebug() << "   🛡️ Setting up overlap monitoring for:" << route.overlapCircuits;
+        // You can add overlap monitoring logic here if needed
+    }
+
+    return true;
 }
 
 } // namespace RailFlux::Route

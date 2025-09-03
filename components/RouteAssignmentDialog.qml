@@ -798,7 +798,7 @@ Rectangle {
             sourceSignalId,
             selectedDestSignalId,
             "UP",        // Default direction
-            "operator",  // Default operator
+            "operator",  // Default operatolr
             {},          // Empty train data
             "NORMAL"     // Default priority
         )

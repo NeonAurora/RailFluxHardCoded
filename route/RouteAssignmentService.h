@@ -13,6 +13,7 @@
 #include <QDebug>
 #include <QSqlQuery>
 #include <memory>
+#include <QThread>
 #include <optional>
 
 // Forward declarations
@@ -59,6 +60,25 @@ struct ProcessingResult {
     QVariantMap signalAspects;
     QVariantMap pointMachines;
     QString overlapReservationId;
+};
+
+// Add to RouteAssignmentService.h after existing structures
+
+struct HardcodedRoute {
+    QString sourceSignalId;
+    QString destSignalId;
+    QStringList path;                    // Hardcoded circuit path
+    QStringList overlapCircuits;         // Hardcoded overlap
+    QVariantMap signalAspects;          // Hardcoded signal settings
+    QVariantMap pointMachineSettings;   // Hardcoded PM positions
+    QString reachability;               // "SUCCESS" or "BLOCKED"
+    QString blockedReason;              // If blocked
+    double simulatedProcessingTime;     // For realistic timing
+};
+
+struct HardcodedRouteDatabase {
+    QList<HardcodedRoute> routes;
+    QMap<QString, QList<HardcodedRoute>> routesBySource; // Indexed by source signal
 };
 
 class RouteAssignmentService : public QObject {
@@ -317,6 +337,12 @@ private:
 
     int convertPriorityToInt(const QString& priorityStr) const;
 
+    void initializeHardcodedRoutes();
+    int findHardcodedRoute(const QString& sourceId, const QString& destId);
+    bool applyHardcodedRoute(const QString& routeId, const HardcodedRoute& route, const QString& operatorId);
+
+
+
 private:
     // Service dependencies (composed services)
     DatabaseManager* m_dbManager = nullptr;
@@ -330,6 +356,8 @@ private:
     bool m_isOperational = false;
     bool m_emergencyMode = false;
     bool m_degradedMode = false;
+    // === HARDCODED ROUTE DATA ===
+    HardcodedRouteDatabase m_hardcodedRoutes;
 
     // Request processing
     QQueue<RouteRequest> m_requestQueue;
