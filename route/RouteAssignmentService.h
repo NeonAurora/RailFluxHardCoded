@@ -338,7 +338,7 @@ private:
     int convertPriorityToInt(const QString& priorityStr) const;
 
     void initializeHardcodedRoutes();
-    int findHardcodedRoute(const QString& sourceId, const QString& destId);
+    HardcodedRoute findHardcodedRoute(const QString& sourceId, const QString& destId);
     bool applyHardcodedRoute(const QString& routeId, const HardcodedRoute& route, const QString& operatorId);
 
 
