@@ -1756,9 +1756,9 @@ void RailFlux::Route::RouteAssignmentService::initializeHardcodedRoutes() {
     // Route 1: HM001 → ST001 (Simple route)
     m_hardcodedRoutes.routes.append(createRoute(
         "HM001", "ST001",
-        QStringList{"TC01", "TC02", "TC03", "TC04"},           // Path
-        QStringList{"TC05", "TC06"},                           // Overlap
-        QVariantMap{{"HM001", "GREEN"}, {"ST001", "RED"}},     // Signal aspects
+        QStringList{"W22T", "3T"},           // Path
+        QStringList{"W21T", "2T"},                           // Overlap
+        QVariantMap{{"HM001", "YELLOW"}, {"ST001", "RED"}},     // Signal aspects
         QVariantMap{{"PM001", "NORMAL"}},                      // Point machines
         "SUCCESS", "", 45.0
         ));
@@ -1766,29 +1766,19 @@ void RailFlux::Route::RouteAssignmentService::initializeHardcodedRoutes() {
     // Route 2: HM001 → ST002 (Requires PM movement)
     m_hardcodedRoutes.routes.append(createRoute(
         "HM001", "ST002",
-        QStringList{"TC01", "TC02", "TC07", "TC08", "TC09"},
-        QStringList{"TC10", "TC11"},
-        QVariantMap{{"HM001", "GREEN"}, {"ST002", "RED"}, {"SIG_INTERMEDIATE", "YELLOW"}},
-        QVariantMap{{"PM001", "REVERSE"}, {"PM002", "NORMAL"}},
+        QStringList{"W22T", "4T"},
+        QStringList{"W21T", "2T"},
+        QVariantMap{{"HM001", "YELLOW"}, {"ST002", "RED"}},
+        QVariantMap{{"PM001", "REVERSE"}},
         "SUCCESS", "", 75.0
-        ));
-
-    // Route 3: HM001 → ST003 (Blocked route)
-    m_hardcodedRoutes.routes.append(createRoute(
-        "HM001", "ST003",
-        QStringList{},  // Empty path for blocked
-        QStringList{},  // Empty overlap for blocked
-        QVariantMap{},  // No signal changes for blocked
-        QVariantMap{},  // No PM changes for blocked
-        "BLOCKED", "CIRCUIT_OCCUPIED_TC15", 25.0
         ));
 
     // Route 4: ST001 → AS001 (Starter to Advanced Starter)
     m_hardcodedRoutes.routes.append(createRoute(
         "ST001", "AS001",
-        QStringList{"TC12", "TC13", "TC14"},
-        QStringList{"TC15"},
-        QVariantMap{{"ST001", "GREEN"}, {"AS001", "RED"}},
+        QStringList{"W21T", "2T"},
+        QStringList{"1T", "A1T"},
+        QVariantMap{{"ST001", "YELLOW"}, {"AS001", "RED"}},
         QVariantMap{},  // No PM changes needed
         "SUCCESS", "", 35.0
         ));
@@ -1803,7 +1793,7 @@ void RailFlux::Route::RouteAssignmentService::initializeHardcodedRoutes() {
     qDebug() << "✅ Initialized" << m_hardcodedRoutes.routes.size() << "hardcoded routes";
 }
 
-RailFlux::Route::RouteAssignmentService::HardcodedRoute RailFlux::Route::RouteAssignmentService::findHardcodedRoute(const QString& sourceId, const QString& destId) {
+HardcodedRoute RailFlux::Route::RouteAssignmentService::findHardcodedRoute(const QString& sourceId, const QString& destId) {
     // Search for matching route
     for (const auto& route : m_hardcodedRoutes.routes) {
         if (route.sourceSignalId == sourceId && route.destSignalId == destId) {
