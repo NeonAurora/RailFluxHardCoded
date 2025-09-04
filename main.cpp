@@ -84,12 +84,6 @@ int main(int argc, char *argv[])
                          qCritical() << "MANUAL INTERVENTION REQUIRED";
                      });
 
-    // Basic route event logging (console only)
-    QObject::connect(routeAssignmentService, &RouteAssignmentService::routeRequested,
-                     [](const QString& requestId, const QString& sourceSignal, const QString& destSignal) {
-                         qDebug() << "Route requested:" << requestId << "from" << sourceSignal << "to" << destSignal;
-                     });
-
     QObject::connect(routeAssignmentService, &RouteAssignmentService::routeAssigned,
                      [](const QString& routeId, const QString& sourceSignal, const QString& destSignal, const QStringList& path) {
                          qDebug() << "Route assigned:" << routeId << "from" << sourceSignal << "to" << destSignal;
@@ -99,12 +93,6 @@ int main(int argc, char *argv[])
     QObject::connect(routeAssignmentService, &RouteAssignmentService::routeFailed,
                      [](const QString& routeId, const QString& reason) {
                          qWarning() << "Route failed:" << routeId << "Reason:" << reason;
-                     });
-
-    // Basic performance monitoring
-    QObject::connect(routeAssignmentService, &RouteAssignmentService::performanceWarning,
-                     [](const QString& metric, double value, double threshold) {
-                         qWarning() << "Route Performance Warning:" << metric << "=" << value << "(threshold:" << threshold << ")";
                      });
 
     // Cleanup on application exit

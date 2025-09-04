@@ -19,12 +19,6 @@ RouteAssignmentService::RouteAssignmentService(QObject* parent)
 }
 
 RouteAssignmentService::~RouteAssignmentService() {
-    if (m_processingTimer) {
-        m_processingTimer->stop();
-    }
-    if (m_maintenanceTimer) {
-        m_maintenanceTimer->stop();
-    }
 }
 
 void RouteAssignmentService::setServices(
@@ -34,35 +28,18 @@ void RouteAssignmentService::setServices(
 }
 
 void RouteAssignmentService::initialize() {
-    if (!m_dbManager) {
-        qCritical() << "[RouteAssignmentService > initialize] DatabaseManager not set";
-        return;
+    qDebug() << "Initializing hardcoded RouteAssignmentService...";
+
+    // ✅ SIMPLIFIED INITIALIZATION
+    m_isOperational = (m_dbManager && m_dbManager->isConnected());
+
+    if (m_isOperational) {
+        qDebug() << "RouteAssignmentService initialized successfully";
+    } else {
+        qWarning() << "RouteAssignmentService initialization failed - no database connection";
     }
 
-    try {
-
-        // Load configuration
-        if (loadConfiguration()) {
-            // Connect to database changes for reactive updates
-            connect(
-                m_dbManager,
-                &DatabaseManager::connectionStateChanged,
-                this,
-                [this](bool connected) {
-                    if (!connected) {
-                        m_isOperational = false;
-                        emit operationalStateChanged();
-                    }
-                }
-            );
-        } else {
-            qCritical() << "[RouteAssignmentService > initialize] Failed to load configuration";
-        }
-    } catch (const std::exception& e) {
-        qCritical() << "[RouteAssignmentService > initialize] Initialization failed:" << e.what();
-        m_isOperational = false;
-        emit operationalStateChanged();
-    }
+    emit operationalStateChanged();
 }
 
 QString RouteAssignmentService::requestRoute(
@@ -142,12 +119,6 @@ QString RouteAssignmentService::generateRequestId() const {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
-// Database integration stubs
-bool RouteAssignmentService::loadConfiguration() {
-    // Load configuration from database or config files
-    return true; // Placeholder
-}
-
 QVariantMap RouteAssignmentService::formatScanResults(const QList<DestinationCandidate>& candidates) {
 
     QVariantMap result;
@@ -198,24 +169,6 @@ QVariantMap RouteAssignmentService::formatScanResults(const QList<DestinationCan
     result["success"] = true;
 
     return result;
-}
-
-
-int RouteAssignmentService::convertPriorityToInt(const QString& priorityStr) const {
-    //   SAFETY: Convert string priorities to valid database range (1-1000)
-    if (priorityStr == "EMERGENCY") {
-        return 1000;        // Highest priority
-    } else if (priorityStr == "HIGH") {
-        return 600;         // High priority
-    } else if (priorityStr == "NORMAL") {
-        return 100;         // Normal priority (default)
-    } else if (priorityStr == "LOW") {
-        return 50;          // Low priority (but still > 1)
-    } else {
-        qWarning() << "RouteAssignmentService: Unknown priority string:" << priorityStr
-                   << "- using default priority 100";
-        return 100;         // Safe default
-    }
 }
 
 void RailFlux::Route::RouteAssignmentService::initializeHardcodedRoutes() {
