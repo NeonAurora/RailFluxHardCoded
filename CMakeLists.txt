@@ -64,22 +64,22 @@ qt_add_qml_module(appRailFlux
         interlocking/SignalRule.cpp
         interlocking/InterlockingRuleEngine.h
         interlocking/InterlockingRuleEngine.cpp
-        interlocking/AspectPropagationService.h
-        interlocking/AspectPropagationService.cpp
-        route/GraphService.h
-        route/GraphService.cpp
-        route/ResourceLockService.h
-        route/ResourceLockService.cpp
-        route/OverlapService.h
-        route/OverlapService.cpp
-        route/TelemetryService.h
-        route/TelemetryService.cpp
-        route/VitalRouteController.h
-        route/VitalRouteController.cpp
+
+
+
+
+
+
+
+
+
+
+
+
         route/RouteAssignmentService.h
         route/RouteAssignmentService.cpp
-        route/SafetyMonitorService.h
-        route/SafetyMonitorService.cpp
+
+
 
     # Only non-code resources (SQL files, data files)
     RESOURCES

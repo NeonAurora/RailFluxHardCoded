@@ -128,6 +128,12 @@ public:
     double averageProcessingTimeMs() const { return m_averageProcessingTime; }
     bool emergencyMode() const { return m_emergencyMode; }
 
+    Q_INVOKABLE QVariantMap scanDestinationSignals(
+        const QString& sourceSignalId,
+        const QString& direction = "AUTO", // AUTO, UP, DOWN
+        bool includeBlocked = true
+        );
+
     // === MAIN API ===
     Q_INVOKABLE QString requestRoute(
         const QString& sourceSignalId,
@@ -171,6 +177,11 @@ private:
         QStringList conflicts;
         QList<DestinationCandidate::RequiredPMAction> requiredPMActions;
     };
+
+    QList<DestinationCandidate> performDestinationScan(
+        const QString& sourceSignalId,
+        const QString& direction
+        );
     QVariantMap formatScanResults(const QList<DestinationCandidate>& candidates);
 
     // Route state management

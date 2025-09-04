@@ -1,10 +1,5 @@
 #include "RouteAssignmentService.h"
 #include "../database/DatabaseManager.h"
-#include "GraphService.h"
-#include "ResourceLockService.h"
-#include "OverlapService.h"
-#include "TelemetryService.h"
-#include "VitalRouteController.h"
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -19,9 +14,6 @@ namespace RailFlux::Route {
 
 RouteAssignmentService::RouteAssignmentService(QObject* parent)
     : QObject(parent)
-    , m_processingTimer(new QTimer(this))
-    , m_serviceStartTime(QDateTime::currentDateTime().toSecsSinceEpoch())
-    , m_maintenanceTimer(new QTimer(this))
 {
     initializeHardcodedRoutes();
 }
@@ -136,22 +128,6 @@ QString RouteAssignmentService::requestRoute(
 
         m_successfulRoutes++;
 
-        // Update metrics
-        if (m_telemetryService) {
-            m_telemetryService->recordPerformanceMetric(
-                "route_processing_hardcoded",
-                totalTime,
-                true,
-                routeId,
-                QVariantMap{
-                    {"sourceSignal", sourceSignalId},
-                    {"destSignal", destSignalId},
-                    {"pathLength", hardcodedRoute.path.size()},
-                    {"overlapCount", hardcodedRoute.overlapCircuits.size()}
-                }
-                );
-        }
-
         return routeId;
     } else {
         qCritical() << "❌ [HARDCODED_ROUTE] Failed to apply route changes";
@@ -166,42 +142,10 @@ QString RouteAssignmentService::generateRequestId() const {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
-QString RouteAssignmentService::routeStateToString(RouteState state) const {
-    // Basic implementation - adjust based on actual RouteState enum values
-    switch (state) {
-        case RouteState::REQUESTED:           return "REQUESTED";
-        case RouteState::VALIDATING:          return "VALIDATING";
-        case RouteState::RESERVED:            return "RESERVED";
-        case RouteState::ACTIVE:              return "ACTIVE";
-        case RouteState::PARTIALLY_RELEASED:  return "PARTIALLY_RELEASED";
-        case RouteState::RELEASED:            return "RELEASED";
-        case RouteState::FAILED:              return "FAILED";
-        case RouteState::EMERGENCY_RELEASED:  return "EMERGENCY_RELEASED";
-        default:                              return "UNKNOWN";
-    }
-}
-
 // Database integration stubs
 bool RouteAssignmentService::loadConfiguration() {
     // Load configuration from database or config files
     return true; // Placeholder
-}
-
-bool RouteAssignmentService::activateRoute(const QString& routeId) {
-    if (!m_vitalController) {
-        return false;
-    }
-
-    // Update route state to ACTIVE instead of calling non-existent method
-    bool success = m_vitalController->updateRouteState(routeId, "ACTIVE");
-
-    if (success) {
-        emit routeActivated(routeId);
-    } else {
-        qCritical() << "[RouteAssignmentService > activateRoute] Failed to activate route" << routeId;
-    }
-
-    return success;
 }
 
 QVariantMap RouteAssignmentService::formatScanResults(const QList<DestinationCandidate>& candidates) {
@@ -427,6 +371,188 @@ bool RailFlux::Route::RouteAssignmentService::applyHardcodedRoute(const QString&
     }
 
     return true;
+}
+
+QVariantMap RouteAssignmentService::scanDestinationSignals(
+    const QString& sourceSignalId,
+    const QString& direction,
+    bool includeBlocked) {
+
+    QElapsedTimer scanTimer;
+    scanTimer.start();
+
+    // Validate source signal
+    if (!m_dbManager) {
+        return QVariantMap{{"error", "Database manager not available"}};
+    }
+
+    auto sourceSignal = m_dbManager->getSignalById(sourceSignalId);
+    if (sourceSignal.isEmpty()) {
+        return QVariantMap{{"error", "Source signal not found: " + sourceSignalId}};
+    }
+
+    // Auto-determine direction if needed
+    QString actualDirection = direction;
+    if (direction == "AUTO") {
+        actualDirection = "UP";
+    }
+
+    if (actualDirection != "UP" && actualDirection != "DOWN") {
+        return QVariantMap{{"error", "Invalid direction: " + actualDirection}};
+    }
+
+    // Perform scan
+    auto candidates = performDestinationScan(sourceSignalId, actualDirection);
+
+    // Count different types before filtering
+    int totalCandidates = candidates.size();
+    int reachableClear = 0, reachableRequiresPM = 0, blocked = 0, invalid = 0;
+
+    for (const auto& candidate : candidates) {
+        if (candidate.reachability == "REACHABLE_CLEAR") reachableClear++;
+        else if (candidate.reachability == "REACHABLE_REQUIRES_PM") reachableRequiresPM++;
+        else if (candidate.reachability == "BLOCKED") blocked++;
+
+        if (candidate.pathSummary.hopCount < 0) invalid++;
+    }
+
+    // Filter out blocked candidates if requested
+    if (!includeBlocked) {
+        candidates.erase(
+            std::remove_if(candidates.begin(), candidates.end(),
+                           [](const DestinationCandidate& c) {
+                               return c.reachability == "BLOCKED";
+                           }),
+            candidates.end()
+            );
+    }
+
+    // Format results
+    auto results = formatScanResults(candidates);
+    results["scan_time_ms"] = scanTimer.elapsed();
+    results["source_signal_id"] = sourceSignalId;
+    results["direction"] = actualDirection;
+    results["total_candidates"] = candidates.size();
+
+    // Add summary statistics for monitoring
+    results["summary_stats"] = QVariantMap{
+        {"reachable_clear", reachableClear},
+        {"reachable_requires_pm", reachableRequiresPM},
+        {"blocked", blocked},
+        {"invalid_paths", invalid}
+    };
+
+    Q_UNUSED(totalCandidates);
+    return results;
+}
+
+QList<RouteAssignmentService::DestinationCandidate>
+RouteAssignmentService::performDestinationScan(
+    const QString& sourceSignalId,
+    const QString& direction) {
+
+    QList<DestinationCandidate> candidates;
+
+    // =====================================
+    // HARDCODED ROUTE DEFINITIONS
+    // =====================================
+
+    // Helper function to create a basic candidate
+    auto createCandidate = [&](const QString& destId, const QString& displayName,
+                               const QString& reachability, int hopCount = 3,
+                               double weight = 1.0, const QStringList& circuitPreview = {},
+                               const QList<DestinationCandidate::RequiredPMAction>& pmActions = {}) -> DestinationCandidate {
+        DestinationCandidate candidate;
+        candidate.destSignalId = destId;
+        candidate.displayName = displayName;
+        candidate.direction = direction;
+        candidate.reachability = reachability;
+
+        if (reachability == "BLOCKED") {
+            candidate.blockedReason = "BLOCK";
+            candidate.pathSummary.hopCount = -1;
+            candidate.pathSummary.estimatedWeight = -1.0;
+            candidate.pathSummary.circuitsPreview.clear();
+        } else {
+            candidate.pathSummary.hopCount = hopCount;
+            candidate.pathSummary.estimatedWeight = weight;
+            candidate.pathSummary.circuitsPreview = circuitPreview.isEmpty()
+                                                        ? QStringList{"TC01", "TC02", "...", "TC" + QString::number(hopCount + 10)}
+                                                        : circuitPreview;
+        }
+
+        candidate.requiredPMActions = pmActions;
+        candidate.conflicts.clear();
+        candidate.telemetry.clear();
+
+        return candidate;
+    };
+
+    // Helper function to create a PM action
+    auto createPMAction = [](const QString& machineId, const QString& currentPos,
+                             const QString& targetPos) -> DestinationCandidate::RequiredPMAction {
+        DestinationCandidate::RequiredPMAction action;
+        action.machineId = machineId;
+        action.currentPosition = currentPos;
+        action.targetPosition = targetPos;
+        return action;
+    };
+
+    // =====================================
+    // HARDCODED SIGNAL ROUTES
+    // =====================================
+
+    if (sourceSignalId == "HM001") {
+        // Route from HM001 - HOME signal
+        candidates.append(createCandidate("ST001", "ST001 (Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W22T", "3T"}));
+        candidates.append(createCandidate("ST002", "ST002 (Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W22T", "4T"}));
+    }
+    else if (sourceSignalId == "HM002") {
+        // Route from HM002 - HOME signal
+        candidates.append(createCandidate("ST003", "ST003 (Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W21T", "3T"}));
+        candidates.append(createCandidate("ST004", "ST004 (Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W21T", "4T"}));
+    }
+    else if (sourceSignalId == "ST001") {
+        candidates.append(createCandidate("AS001", "AS001 (Advanced Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W21T", "2T"}));
+    }
+    else if (sourceSignalId == "ST002") {
+        candidates.append(createCandidate("AS002", "AS002 (Advanced Starter)", "REACHABLE_CLEAR", 2, 1,
+                                          QStringList{"W22T", "5T"}));
+    }
+    else {
+        // Default case - return some generic candidates for any unknown signal
+        candidates.append(createCandidate("DEFAULT_01", "Default Dest 1", "REACHABLE_CLEAR", 3, 2.0));
+        candidates.append(createCandidate("DEFAULT_02", "Default Dest 2", "BLOCKED"));
+    }
+
+    // =====================================
+    // MAINTAIN ORIGINAL SORTING LOGIC
+    // =====================================
+
+    // Sort candidates: Reachable first, then by hop count, then by weight
+    std::sort(candidates.begin(), candidates.end(),
+              [](const DestinationCandidate& a, const DestinationCandidate& b) {
+                  auto getPriority = [](const QString& reachability) {
+                      if (reachability == "REACHABLE_CLEAR") return 0;
+                      if (reachability == "REACHABLE_REQUIRES_PM") return 1;
+                      return 2; // BLOCKED
+                  };
+                  int aPriority = getPriority(a.reachability);
+                  int bPriority = getPriority(b.reachability);
+                  if (aPriority != bPriority) return aPriority < bPriority;
+                  if (a.pathSummary.hopCount != b.pathSummary.hopCount)
+                      return a.pathSummary.hopCount < b.pathSummary.hopCount;
+                  return a.pathSummary.estimatedWeight < b.pathSummary.estimatedWeight;
+              });
+
+    Q_UNUSED(sourceSignalId);
+    Q_UNUSED(direction);
+    return candidates;
 }
 
 } // namespace RailFlux::Route
