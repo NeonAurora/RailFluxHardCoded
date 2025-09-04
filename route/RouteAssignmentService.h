@@ -84,7 +84,6 @@ struct HardcodedRouteDatabase {
 class RouteAssignmentService : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool isOperational READ isOperational NOTIFY operationalStateChanged)
-    Q_PROPERTY(int activeRoutes READ activeRoutes NOTIFY routeCountChanged)
     Q_PROPERTY(int pendingRequests READ pendingRequests NOTIFY requestQueueChanged)
     Q_PROPERTY(double averageProcessingTimeMs READ averageProcessingTimeMs NOTIFY performanceChanged)
     Q_PROPERTY(bool emergencyMode READ emergencyMode NOTIFY emergencyModeChanged)
@@ -120,27 +119,14 @@ public:
 
     // Service composition - must be called after construction
     void setServices(
-        DatabaseManager* dbManager,
-        GraphService* graphService,
-        ResourceLockService* resourceLockService,
-        OverlapService* overlapService,
-        TelemetryService* telemetryService,
-        VitalRouteController* vitalController
+        DatabaseManager* dbManager
         );
 
     // Properties
     bool isOperational() const { return m_isOperational; }
-    int activeRoutes() const;
     int pendingRequests() const { return m_requestQueue.size(); }
     double averageProcessingTimeMs() const { return m_averageProcessingTime; }
     bool emergencyMode() const { return m_emergencyMode; }
-
-    // === ROUTE SCANNING API ===
-    Q_INVOKABLE QVariantMap scanDestinationSignals(
-        const QString& sourceSignalId,
-        const QString& direction = "AUTO", // AUTO, UP, DOWN
-        bool includeBlocked = true
-        );
 
     // === MAIN API ===
     Q_INVOKABLE QString requestRoute(
@@ -152,60 +138,12 @@ public:
         const QString& priority = "NORMAL"
         );
 
-    Q_INVOKABLE bool cancelRoute(
-        const QString& routeId,
-        const QString& reason = "operator_cancel"
-        );
-
     Q_INVOKABLE bool activateRoute(
         const QString& routeId
         );
 
-    Q_INVOKABLE bool releaseRoute(
-        const QString& routeId,
-        const QString& reason = "normal_release"
-        );
-
-    // === EMERGENCY OPERATIONS ===
-    Q_INVOKABLE bool emergencyReleaseRoute(
-        const QString& routeId,
-        const QString& reason
-        );
-
-    Q_INVOKABLE bool emergencyReleaseAllRoutes(
-        const QString& reason
-        );
-
-    Q_INVOKABLE void activateEmergencyMode(
-        const QString& reason
-        );
-
-    Q_INVOKABLE void deactivateEmergencyMode();
-
-    // === ROUTE STATUS AND MONITORING ===
-    Q_INVOKABLE QVariantMap getRouteStatus(const QString& routeId) const;
-    Q_INVOKABLE QVariantList getActiveRoutes() const;
-    Q_INVOKABLE QVariantList getPendingRequests() const;
-    Q_INVOKABLE QVariantMap getSystemStatus() const;
-
-    // === CONFIGURATION ===
-    Q_INVOKABLE bool setMaxConcurrentRoutes(int maxRoutes);
-    Q_INVOKABLE int getMaxConcurrentRoutes() const { return m_maxConcurrentRoutes; }
-    Q_INVOKABLE bool setProcessingTimeout(int timeoutMs);
-    Q_INVOKABLE int getProcessingTimeout() const { return m_processingTimeoutMs; }
-
-    // === STATISTICS AND REPORTING ===
-    Q_INVOKABLE QVariantMap getPerformanceStatistics() const;
-    Q_INVOKABLE QVariantMap getOperationalStatistics() const;
-    Q_INVOKABLE QVariantList getRouteHistory(int limitHours = 24) const;
-
 public slots:
     void initialize();
-    void processRequestQueue();
-    void onTrackCircuitOccupancyChanged(const QString& circuitId, bool isOccupied);
-    void onRouteStateChanged(const QString& routeId, const QString& newState);
-    void onSystemOverload();
-    void performMaintenanceCheck();
 
 signals:
     void operationalStateChanged();
@@ -233,49 +171,7 @@ private:
         QStringList conflicts;
         QList<DestinationCandidate::RequiredPMAction> requiredPMActions;
     };
-
-    // === SCAN IMPLEMENTATION ===
-    QList<DestinationCandidate> performDestinationScan(
-        const QString& sourceSignalId,
-        const QString& direction
-        );
-
-    QStringList getEligibleDestinationSignals(
-        const QString& sourceSignalId,
-        const QString& direction
-        );
-
-    DestinationCandidate evaluateDestinationReachability(
-        const QString& sourceSignalId,
-        const QString& destSignalId,
-        const QString& direction
-        );
-
-    QString determineSignalDirection(const QString& signalId);
-    bool isValidSignalProgression(const QString& sourceType, const QString& destType);
     QVariantMap formatScanResults(const QList<DestinationCandidate>& candidates);
-
-    // === CLEARANCE CHECKING ===
-    ClearanceCheckResult checkPathClearance(const QStringList& path);
-    bool isCircuitReserved(const QString& circuitId);
-    bool isPointMachineSettable(const QString& machineId);
-    QList<DestinationCandidate::RequiredPMAction> getRequiredPointMachineActions(const QStringList& path);
-
-    // Main route processing pipeline
-    ProcessingResult processRouteRequest(const RouteRequest& request);
-
-    // Processing pipeline stages
-    ProcessingResult validateRequest(const RouteRequest& request);
-    ProcessingResult performPathfinding(const RouteRequest& request);
-    ProcessingResult calculateOverlap(const RouteRequest& request, const QStringList& path);
-    ProcessingResult reserveResources(const RouteRequest& request, const QStringList& path, const QStringList& overlap);
-    ProcessingResult finalizeRoute(const RouteRequest& request, const QStringList& path, const QStringList& overlap);
-
-    // Queue management
-    void addToQueue(const RouteRequest& request);
-    RouteRequest dequeueRequest();
-    void prioritizeQueue();
-    bool shouldProcessRequest() const;
 
     // Route state management
     void updateRouteState(const QString& routeId, RouteState newState);
@@ -285,34 +181,14 @@ private:
     // Emergency handling
     void processEmergencyRelease(const QString& routeId, const QString& reason);
     void processEmergencyReleaseAll(const QString& reason);
-    void enterDegradedMode();
-    void exitDegradedMode();
-
-    // Performance monitoring
-    void recordProcessingTime(const QString& stage, double timeMs);
-    void updateAverageProcessingTime();
-    void checkPerformanceThresholds();
 
     // System monitoring
     void checkSystemHealth();
     void updateOperationalStatus();
-    bool areServicesHealthy() const;
 
     // Configuration management
     bool loadConfiguration();
     bool saveConfiguration();
-    void applyDegradedModeSettings();
-    void restoreNormalModeSettings();
-
-    // Integration with Layer 2 services
-    QVariantMap findOptimalPath(const QString& sourceSignal, const QString& destSignal, const QString& direction);
-    QVariantMap calculateRouteOverlap(const QString& destSignal, const QStringList& path, const QVariantMap& trainData);
-    bool reserveRouteResources(const QString& routeId, const QStringList& circuits, const QStringList& pointMachines);
-    bool releaseRouteResources(const QString& routeId);
-
-    // Database integration
-    bool persistRouteRequest(const RouteRequest& request);
-    bool persistRouteAssignment(const QString& routeId, const RouteRequest& request, const QStringList& path);
     bool updateRouteInDatabase(const QString& routeId, RouteState state, const QVariantMap& data = QVariantMap());
 
     // Reactive updates from database
@@ -326,14 +202,6 @@ private:
     RouteState stringToRouteState(const QString& stateStr) const;
     QVariantMap requestToVariantMap(const RouteRequest& request) const;
     QVariantMap resultToVariantMap(const ProcessingResult& result) const;
-    int calculateRequestPriority(const RouteRequest& request) const;
-
-    // Validation helpers
-    bool isValidSignalId(const QString& signalId) const;
-    bool isValidDirection(const QString& direction) const;
-    bool isValidPriority(const QString& priority) const;
-    bool canAcceptNewRequests() const;
-    QString resolveSignalToCircuit(const QString& signalId, bool isSource);
 
     int convertPriorityToInt(const QString& priorityStr) const;
 
