@@ -618,44 +618,6 @@ Rectangle {
         }
     }
 
-    // === ROUTE VISUALIZATION OVERLAY ===
-    RouteVisualization {
-        id: routeVisualization
-        anchors.fill: parent
-        stationLayout: stationLayout
-        isEnabled: isRouteVisualizationEnabled
-        visible: isRouteVisualizationEnabled
-        
-        // Pass the cell size for proper positioning
-        cellSize: stationLayout.cellSize
-    }
-
-    // === ROUTE MANAGEMENT PANEL ===
-    RouteInfoPanel {
-        id: routeManagementPanel
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: 10
-        anchors.rightMargin: 10
-        width: 350
-        height: 400
-        visible: isRouteManagementVisible
-        z: 100  // Ensure it's above other components
-    }
-
-    // === PERFORMANCE DASHBOARD ===
-    PerformanceDashboard {
-        id: performanceDashboard
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.topMargin: 10
-        anchors.leftMargin: 10
-        width: 500
-        height: 600
-        visible: isPerformanceDashboardVisible
-        z: 100  // Ensure it's above other components
-    }
-
     // Uptime timer (unchanged)
     Timer {
         id: uptimeTimer

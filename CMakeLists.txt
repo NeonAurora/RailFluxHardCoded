@@ -38,12 +38,12 @@ qt_add_qml_module(appRailFlux
         components/PointMachine.qml
         components/ToastNotification.qml
         components/SignalContextMenu.qml
-        components/PerformanceDashboard.qml
-        components/RouteInfoItem.qml
-        components/RouteInfoPanel.qml
-        components/RouteOverlay.qml
-        components/RouteSignalDot.qml
-        components/RouteVisualization.qml
+
+
+
+
+
+
         components/SignalIndicator.qml
 
     # All C++ source files properly organized
