@@ -1,6 +1,6 @@
--- 
+-- ============================================================================
 -- SIMPLE CLEANUP APPROACH
--- 
+-- ============================================================================
 
 -- Drop existing schemas in dependency order (CASCADE removes all dependent objects)
 DROP SCHEMA IF EXISTS railway_control CASCADE;
@@ -23,9 +23,9 @@ CREATE SCHEMA railway_config;
 -- Set search path
 SET search_path TO railway_control, railway_audit, railway_config, public;
 
--- 
+-- ============================================================================
 -- CONFIGURATION TABLES (With Route Assignment Integration)
--- 
+-- ============================================================================
 
 CREATE TABLE railway_config.signal_types (
     id SERIAL PRIMARY KEY,
@@ -66,9 +66,9 @@ CREATE TABLE railway_config.point_positions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 
+-- ============================================================================
 -- CORE RAILWAY INFRASTRUCTURE TABLES (With Route Assignment Integration)
--- 
+-- ============================================================================
 
 -- Track circuits with route assignment enhancements
 CREATE TABLE railway_control.track_circuits (
@@ -90,7 +90,6 @@ CREATE TABLE railway_control.track_circuits (
 );
 
 -- Track segments with circuit references
-
 CREATE TABLE railway_control.track_segments (
     id SERIAL PRIMARY KEY,
     segment_id VARCHAR(20) NOT NULL UNIQUE, -- e.g., "T1S1", "T1S2"
@@ -101,6 +100,7 @@ CREATE TABLE railway_control.track_segments (
     end_col NUMERIC(10,2) NOT NULL,
     track_segment_type VARCHAR(20) DEFAULT 'STRAIGHT',
     is_assigned BOOLEAN DEFAULT FALSE,
+    is_overlap BOOLEAN DEFAULT FALSE,
     circuit_id VARCHAR(20) REFERENCES railway_control.track_circuits(circuit_id),
     length_meters NUMERIC(10,2),
     max_speed_kmh INTEGER,
@@ -237,41 +237,6 @@ CREATE TABLE railway_control.interlocking_rules (
     )
 );
 
--- 
--- ROUTE ASSIGNMENT SPECIFIC TABLES
--- 
-
--- Track circuit edges for pathfinding
-CREATE TABLE railway_control.track_circuit_edges (
-    id SERIAL PRIMARY KEY,
-    from_circuit_id TEXT NOT NULL REFERENCES railway_control.track_circuits(circuit_id),
-    to_circuit_id TEXT NOT NULL REFERENCES railway_control.track_circuits(circuit_id),
-    side TEXT NOT NULL CHECK (side IN ('LEFT', 'RIGHT')),
-    condition_point_machine_id TEXT REFERENCES railway_control.point_machines(machine_id),
-    condition_position TEXT CHECK (condition_position IN ('NORMAL', 'REVERSE')),
-    weight NUMERIC(10,2) DEFAULT 1.0,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique constraint ensures no duplicate edges
-    UNIQUE(from_circuit_id, to_circuit_id, side, condition_point_machine_id, condition_position)
-);
-
--- Signal overlap definitions
-CREATE TABLE railway_control.signal_overlap_definitions (
-    id SERIAL PRIMARY KEY,
-    signal_id TEXT NOT NULL UNIQUE REFERENCES railway_control.signals(signal_id),
-    overlap_circuits TEXT[] NOT NULL,
-    overlap_distance_m INTEGER NOT NULL DEFAULT 180,
-    release_conditions TEXT[] DEFAULT '{}',
-    overlap_type TEXT NOT NULL DEFAULT 'FIXED' CHECK (overlap_type IN ('FIXED', 'VARIABLE', 'FLANK_PROTECTION')),
-    overlap_hold_seconds INTEGER NOT NULL DEFAULT 30,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Route assignments - main state tracking
 CREATE TABLE railway_control.route_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -309,60 +274,9 @@ CREATE TABLE railway_control.route_assignments (
     )
 );
 
--- Resource locks for conflict management
-CREATE TABLE railway_control.resource_locks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    resource_type TEXT NOT NULL CHECK (resource_type IN ('TRACK_CIRCUIT', 'POINT_MACHINE', 'SIGNAL')),
-    resource_id TEXT NOT NULL,
-    route_id UUID REFERENCES railway_control.route_assignments(id),
-    lock_type TEXT NOT NULL CHECK (lock_type IN ('ROUTE', 'OVERLAP', 'EMERGENCY', 'MAINTENANCE')),
-    acquired_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP WITH TIME ZONE,
-    released_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    released_by VARCHAR(100),
-    release_reason VARCHAR(100),
-    is_active BOOLEAN DEFAULT TRUE,
-    acquired_by TEXT NOT NULL
-);
-
--- Route events for audit trail
-CREATE TABLE railway_control.route_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    route_id UUID REFERENCES railway_control.route_assignments(id),
-    event_type TEXT NOT NULL CHECK (event_type IN (
-        'ROUTE_REQUESTED', 'VALIDATION_STARTED', 'VALIDATION_COMPLETED',
-        'PATHFINDING_COMPLETED', 'RESOURCE_LOCKED', 'ROUTE_RESERVED',
-        'POINT_MACHINE_MOVED', 'TRACK_CIRCUIT_OCCUPIED', 'ROUTE_ACTIVATED',
-        'MAIN_ROUTE_CLEARED', 'OVERLAP_TIMER_STARTED', 'OVERLAP_RELEASED',
-        'ROUTE_RELEASED', 'ROUTE_FAILED', 'EMERGENCY_RELEASE',
-        'PERFORMANCE_WARNING', 'SAFETY_VIOLATION'
-    )),
-    event_data JSONB NOT NULL,
-    triggered_by TEXT NOT NULL,
-    occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    operator_id VARCHAR(100),
-    sequence_number BIGSERIAL
-);
-
--- Route configuration
-CREATE TABLE railway_control.route_configuration (
-    id SERIAL PRIMARY KEY,
-    config_key TEXT NOT NULL UNIQUE,
-    config_value JSONB NOT NULL,
-    config_type TEXT NOT NULL CHECK (config_type IN ('VITAL', 'OPERATIONAL', 'PERFORMANCE')),
-    description TEXT,
-    default_value JSONB,
-    validation_schema JSONB,
-    last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_by TEXT NOT NULL,
-    requires_authorization BOOLEAN DEFAULT FALSE,
-    change_authorization_id TEXT,
-    change_reason TEXT
-);
-
--- 
+-- ============================================================================
 -- AUDIT AND EVENT LOGGING SYSTEM
--- 
+-- ============================================================================
 
 CREATE TABLE railway_audit.event_log (
     id BIGSERIAL PRIMARY KEY,
@@ -415,9 +329,9 @@ CREATE TABLE railway_audit.system_events (
 -- Create sequence for event ordering
 CREATE SEQUENCE railway_audit.event_sequence;
 
--- 
+-- ============================================================================
 -- INDEXES FOR PERFORMANCE AND SAFETY
--- 
+-- ============================================================================
 
 -- Track circuits indexes
 CREATE INDEX idx_track_circuits_id ON railway_control.track_circuits(circuit_id);
@@ -491,9 +405,9 @@ CREATE INDEX idx_event_log_new_values ON railway_audit.event_log USING gin(new_v
 CREATE INDEX idx_route_assignments_circuits ON railway_control.route_assignments USING gin(assigned_circuits);
 CREATE INDEX idx_route_assignments_overlap ON railway_control.route_assignments USING gin(overlap_circuits);
 
--- 
+-- ============================================================================
 -- FUNCTIONS
--- 
+-- ============================================================================
 
 -- Basic utility functions
 CREATE OR REPLACE FUNCTION railway_audit.set_event_date()
@@ -847,7 +761,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
---  PRIMARY: Function to update track_segment circuit occupancy
+-- ✅ PRIMARY: Function to update track_segment circuit occupancy
 CREATE OR REPLACE FUNCTION railway_control.update_track_circuit_occupancy(
     circuit_id_param VARCHAR,
     is_occupied_param BOOLEAN,
@@ -985,207 +899,6 @@ BEGIN
     RETURN circuit_result;
 END;
 $$ LANGUAGE plpgsql;
-
--- Enhanced pathfinding neighbors function
-CREATE OR REPLACE FUNCTION railway_control.get_pathfinding_neighbors(
-    circuit_id_param TEXT,
-    direction_param TEXT,
-    point_machine_states JSONB DEFAULT '{}'
-)
-RETURNS TABLE(neighbor_circuit_id TEXT, weight NUMERIC) AS $$
-DECLARE
-    side_filter TEXT;
-BEGIN
-    side_filter := CASE
-        WHEN direction_param = 'UP' THEN 'RIGHT'
-        WHEN direction_param = 'DOWN' THEN 'LEFT'
-        ELSE 'RIGHT'
-    END;
-
-    RETURN QUERY
-    SELECT
-        tce.to_circuit_id,
-        tce.weight
-    FROM railway_control.track_circuit_edges tce
-    WHERE tce.from_circuit_id = circuit_id_param
-    AND tce.side = side_filter
-    AND tce.is_active = TRUE
-    AND (
-        tce.condition_point_machine_id IS NULL
-        OR
-        (
-            tce.condition_point_machine_id IS NOT NULL
-            AND jsonb_exists(point_machine_states, tce.condition_point_machine_id)
-            AND (point_machine_states ->> tce.condition_point_machine_id) = tce.condition_position
-        )
-    );
-END;
-$$ LANGUAGE plpgsql;
-
--- Notification functions
-CREATE OR REPLACE FUNCTION railway_control.notify_route_changes()
-RETURNS TRIGGER AS $$
-DECLARE
-    payload JSON;
-BEGIN
-    payload := json_build_object(
-        'table', 'route_assignments',
-        'operation', TG_OP,
-        'route_id', COALESCE(NEW.id, OLD.id),
-        'state', COALESCE(NEW.state, OLD.state),
-        'source_signal_id', COALESCE(NEW.source_signal_id, OLD.source_signal_id),
-        'dest_signal_id', COALESCE(NEW.dest_signal_id, OLD.dest_signal_id),
-        'direction', COALESCE(NEW.direction, OLD.direction),
-        'timestamp', extract(epoch from now())
-    );
-
-    PERFORM pg_notify('route_changes', payload::TEXT);
-    RETURN COALESCE(NEW, OLD);
-END;
-$$ LANGUAGE plpgsql;
-
---  UPDATED: System status function using circuits
-CREATE OR REPLACE FUNCTION railway_control.get_system_status()
-RETURNS JSON AS $$
-DECLARE
-    result JSON;
-    track_segment_stats RECORD;
-    circuit_stats RECORD;
-    signal_stats RECORD;
-    point_stats RECORD;
-    route_stats RECORD;
-BEGIN
-    -- Track segment statistics
-    SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE is_assigned) as assigned
-    INTO track_segment_stats
-    FROM railway_control.track_segments
-    WHERE is_active = TRUE;
-
-    -- Track circuit statistics (enhanced)
-    SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE is_occupied) as occupied,
-        COUNT(*) FILTER (WHERE circuit_type = 'CRITICAL') as critical_count,
-        COUNT(*) FILTER (WHERE is_critical_path = true AND is_occupied = true) as critical_occupied
-    INTO circuit_stats
-    FROM railway_control.track_circuits
-    WHERE is_active = TRUE;
-
-    -- Signal statistics (enhanced)
-    SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE is_active) as active,
-        COUNT(*) FILTER (WHERE is_route_signal = true) as route_signals
-    INTO signal_stats
-    FROM railway_control.signals;
-
-    -- Point machine statistics (enhanced)
-    SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE operating_status = 'CONNECTED') as connected,
-        COUNT(*) FILTER (WHERE operating_status = 'IN_TRANSITION') as in_transition,
-        COUNT(*) FILTER (WHERE route_locking_enabled = true) as route_enabled
-    INTO point_stats
-    FROM railway_control.point_machines;
-
-    -- Route assignment statistics (new)
-    SELECT
-        COUNT(*) as total_routes,
-        COUNT(*) FILTER (WHERE state = 'ACTIVE') as active_routes,
-        COUNT(*) FILTER (WHERE state = 'RESERVED') as reserved_routes,
-        COUNT(*) FILTER (WHERE overlap_release_due_at IS NOT NULL AND overlap_release_due_at <= CURRENT_TIMESTAMP) as expired_overlaps
-    INTO route_stats
-    FROM railway_control.route_assignments
-    WHERE state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED');
-
-    -- Build comprehensive result JSON
-    result := json_build_object(
-        'timestamp', extract(epoch from now()),
-        'track_infrastructure', json_build_object(
-            'total_segments', track_segment_stats.total,
-            'assigned_segments', track_segment_stats.assigned,
-            'total_circuits', circuit_stats.total,
-            'occupied_circuits', circuit_stats.occupied,
-            'critical_circuits', circuit_stats.critical_count,
-            'critical_occupied', circuit_stats.critical_occupied,
-            'available_segments', track_segment_stats.total - track_segment_stats.assigned
-        ),
-        'signals', json_build_object(
-            'total', signal_stats.total,
-            'active', signal_stats.active,
-            'route_signals', signal_stats.route_signals
-        ),
-        'point_machines', json_build_object(
-            'total', point_stats.total,
-            'connected', point_stats.connected,
-            'in_transition', point_stats.in_transition,
-            'route_enabled', point_stats.route_enabled
-        ),
-        'route_assignments', json_build_object(
-            'total_routes', route_stats.total_routes,
-            'active_routes', route_stats.active_routes,
-            'reserved_routes', route_stats.reserved_routes,
-            'expired_overlaps', route_stats.expired_overlaps
-        )
-    );
-
-    RETURN result;
-END;
-$$ LANGUAGE plpgsql;
-
--- Enhanced railway changes notification function
-CREATE OR REPLACE FUNCTION railway_control.notify_railway_changes()
-RETURNS TRIGGER AS $$
-DECLARE
-    payload JSON;
-    entity_id_val TEXT;
-BEGIN
-    -- Extract the appropriate entity ID based on table
-    entity_id_val := CASE TG_TABLE_NAME
-        WHEN 'track_segments' THEN COALESCE(NEW.segment_id, OLD.segment_id)
-        WHEN 'track_circuits' THEN COALESCE(NEW.circuit_id, OLD.circuit_id)
-        WHEN 'signals' THEN COALESCE(NEW.signal_id, OLD.signal_id)
-        WHEN 'point_machines' THEN COALESCE(NEW.machine_id, OLD.machine_id)
-        ELSE COALESCE(NEW.id::TEXT, OLD.id::TEXT)
-    END;
-
-    -- Build payload with essential information
-    payload := json_build_object(
-        'table', TG_TABLE_NAME,
-        'operation', TG_OP,
-        'id', COALESCE(NEW.id, OLD.id),
-        'entity_id', entity_id_val,
-        'timestamp', extract(epoch from now())
-    );
-
-    -- Add table-specific critical fields
-    IF TG_TABLE_NAME = 'track_circuits' THEN
-        payload := payload || json_build_object(
-            'circuit_id', COALESCE(NEW.circuit_id, OLD.circuit_id),
-            'is_occupied', COALESCE(NEW.is_occupied, false),
-            'circuit_type', COALESCE(NEW.circuit_type, OLD.circuit_type)
-        );
-    ELSIF TG_TABLE_NAME = 'signals' THEN
-        payload := payload || json_build_object(
-            'signal_id', COALESCE(NEW.signal_id, OLD.signal_id),
-            'current_aspect_id', COALESCE(NEW.current_aspect_id, OLD.current_aspect_id),
-            'is_route_signal', COALESCE(NEW.is_route_signal, OLD.is_route_signal)
-        );
-    ELSIF TG_TABLE_NAME = 'point_machines' THEN
-        payload := payload || json_build_object(
-            'machine_id', COALESCE(NEW.machine_id, OLD.machine_id),
-            'current_position_id', COALESCE(NEW.current_position_id, OLD.current_position_id),
-            'operating_status', COALESCE(NEW.operating_status, OLD.operating_status)
-        );
-    END IF;
-
-    PERFORM pg_notify('railway_changes', payload::TEXT);
-    RETURN COALESCE(NEW, OLD);
-END;
-$$ LANGUAGE plpgsql;
-
 -- Audit logging function
 CREATE OR REPLACE FUNCTION railway_audit.log_changes()
 RETURNS TRIGGER AS $$
@@ -1270,536 +983,9 @@ BEGIN
     RETURN COALESCE(NEW, OLD);
 END;
 $$ LANGUAGE plpgsql;
-
-
--- 
--- ROUTE STATE UPDATE FUNCTION
--- 
-CREATE OR REPLACE FUNCTION railway_control.update_route_state(
-    route_id_param UUID,
-    new_state_param VARCHAR,
-    operator_id_param VARCHAR DEFAULT 'system',
-    failure_reason_param TEXT DEFAULT NULL
-)
-RETURNS BOOLEAN AS $$
-DECLARE
-    current_state_val VARCHAR;
-    rows_affected INTEGER;
-    route_exists BOOLEAN;
-    state_transition_valid BOOLEAN;
-BEGIN
-    -- Set operator context for audit logging
-    PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-    -- Check if route exists and get current state
-    SELECT state INTO current_state_val
-    FROM railway_control.route_assignments
-    WHERE id = route_id_param;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Route not found: %', route_id_param;
-    END IF;
-
-    -- Validate state transition
-    SELECT railway_control.is_valid_route_state_transition(current_state_val, new_state_param)
-    INTO state_transition_valid;
-
-    IF NOT state_transition_valid THEN
-        RAISE EXCEPTION 'Invalid state transition from % to % for route %',
-            current_state_val, new_state_param, route_id_param;
-    END IF;
-
-    -- Update route state with appropriate timestamps
-    UPDATE railway_control.route_assignments
-    SET
-        state = new_state_param,
-        -- Set specific timestamps based on state
-        activated_at = CASE
-            WHEN new_state_param = 'ACTIVE' AND activated_at IS NULL
-            THEN CURRENT_TIMESTAMP
-            ELSE activated_at
-        END,
-        released_at = CASE
-            WHEN new_state_param IN ('RELEASED', 'EMERGENCY_RELEASED') AND released_at IS NULL
-            THEN CURRENT_TIMESTAMP
-            ELSE released_at
-        END,
-        failure_reason = CASE
-            WHEN new_state_param = 'FAILED'
-            THEN COALESCE(failure_reason_param, failure_reason)
-            ELSE failure_reason
-        END
-    WHERE id = route_id_param;
-
-    GET DIAGNOSTICS rows_affected = ROW_COUNT;
-
-    -- Insert route event for audit trail
-    IF rows_affected > 0 THEN
-        INSERT INTO railway_control.route_events (
-            route_id, event_type, event_data, triggered_by, occurred_at
-        ) VALUES (
-            route_id_param,
-            'ROUTE_STATE_CHANGED',
-            event_data_param,
-            operator_id_param,
-            CURRENT_TIMESTAMP
-        );
-    END IF;
-
-    RETURN rows_affected > 0;
-END;
-$$ LANGUAGE plpgsql;
-
-
-
-CREATE OR REPLACE FUNCTION railway_control.update_route_performance_metrics(
-    route_id_param UUID,
-    metrics_param JSONB,
-    operator_id_param VARCHAR DEFAULT 'system'
-)
-RETURNS BOOLEAN AS $$
-DECLARE
-    rows_affected INTEGER;
-    route_exists BOOLEAN;
-BEGIN
-    -- Set operator context for audit logging
-    PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-    -- Check if route exists
-    SELECT EXISTS(
-        SELECT 1 FROM railway_control.route_assignments
-        WHERE id = route_id_param
-    ) INTO route_exists;
-
-    IF NOT route_exists THEN
-        RAISE EXCEPTION 'Route not found: %', route_id_param;
-    END IF;
-
-    -- Update performance metrics
-    UPDATE railway_control.route_assignments
-    SET
-        performance_metrics = metrics_param,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = route_id_param;
-
-    GET DIAGNOSTICS rows_affected = ROW_COUNT;
-
-    -- Optional: Log performance update (less critical than state changes)
-    IF rows_affected > 0 THEN
-        INSERT INTO railway_control.route_events (
-            route_id, event_type, event_data, operator_id, source_component
-        ) VALUES (
-            route_id_param,
-            'PERFORMANCE_METRICS_UPDATED',
-            jsonb_build_object(
-                'metrics', metrics_param,
-                'updated_by', operator_id_param
-            ),
-            operator_id_param,
-            'DatabaseManager'
-        );
-    END IF;
-
-    RETURN rows_affected > 0;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION railway_control.delete_route_assignment(
-    route_id_param UUID,
-    operator_id_param VARCHAR DEFAULT 'system',
-    force_delete BOOLEAN DEFAULT FALSE
-)
-RETURNS BOOLEAN AS $$
-DECLARE
-    route_record RECORD;
-    rows_affected INTEGER;
-    related_locks INTEGER;
-    related_events INTEGER;
-BEGIN
-    -- Set operator context for audit logging
-    PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-    -- Get route information for validation and audit
-    SELECT id, source_signal_id, dest_signal_id, state, direction, created_at
-    INTO route_record
-    FROM railway_control.route_assignments
-    WHERE id = route_id_param;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Route not found: %', route_id_param;
-    END IF;
-
-    -- Safety validation: prevent deletion of active routes unless forced
-    IF NOT force_delete AND route_record.state IN ('ACTIVE', 'RESERVED', 'PARTIALLY_RELEASED') THEN
-        RAISE EXCEPTION 'Cannot delete route in state %. Route must be RELEASED or FAILED. Use force_delete=true to override.', route_record.state;
-    END IF;
-
-    -- Log deletion attempt for audit trail
-    INSERT INTO railway_control.route_events (
-        route_id, event_type, event_data, operator_id, source_component, safety_critical
-    ) VALUES (
-        route_id_param,
-        'ROUTE_DELETION_REQUESTED',
-        jsonb_build_object(
-            'route_state', route_record.state,
-            'source_signal_id', route_record.source_signal_id,
-            'dest_signal_id', route_record.dest_signal_id,
-            'direction', route_record.direction,
-            'force_delete', force_delete,
-            'deletion_reason', CASE
-                WHEN force_delete THEN 'Force deletion requested'
-                ELSE 'Normal deletion of completed route'
-            END
-        ),
-        operator_id_param,
-        'DatabaseManager',
-        force_delete  -- Mark as safety critical if forced
-    );
-
-    -- Clean up related resource locks first
-    DELETE FROM railway_control.resource_locks
-    WHERE route_id = route_id_param;
-    GET DIAGNOSTICS related_locks = ROW_COUNT;
-
-    -- Count related events for logging
-    SELECT COUNT(*) INTO related_events
-    FROM railway_control.route_events
-    WHERE route_id = route_id_param;
-
-    -- Delete the route assignment
-    DELETE FROM railway_control.route_assignments
-    WHERE id = route_id_param;
-    GET DIAGNOSTICS rows_affected = ROW_COUNT;
-
-    -- Log successful deletion
-    IF rows_affected > 0 THEN
-        INSERT INTO railway_audit.event_log (
-            event_type, entity_type, entity_id, entity_name,
-            old_values, operator_id, operation_source, safety_critical,
-            event_details
-        ) VALUES (
-            'DELETE',
-            'route_assignments',
-            route_id_param::TEXT,
-            CONCAT('Route: ', route_record.source_signal_id, ' -> ', route_record.dest_signal_id),
-            jsonb_build_object(
-                'id', route_record.id,
-                'source_signal_id', route_record.source_signal_id,
-                'dest_signal_id', route_record.dest_signal_id,
-                'state', route_record.state,
-                'direction', route_record.direction,
-                'created_at', route_record.created_at
-            ),
-            operator_id_param,
-            'HMI',
-            force_delete,
-            jsonb_build_object(
-                'related_locks_deleted', related_locks,
-                'related_events_count', related_events,
-                'force_delete', force_delete
-            )
-        );
-    END IF;
-
-    RETURN rows_affected > 0;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION railway_control.release_resource_locks(
-    route_id_param UUID,
-    operator_id_param VARCHAR DEFAULT 'system',
-    release_reason VARCHAR DEFAULT 'ROUTE_COMPLETION'
-)
-RETURNS INTEGER AS $$
-DECLARE
-    route_record RECORD;
-    lock_record RECORD;
-    locks_released INTEGER := 0;
-    released_locks JSONB := '[]';
-    lock_details JSONB;
-BEGIN
-    -- Set operator context for audit logging
-    PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-    -- Validate route exists and get current state
-    SELECT id, source_signal_id, dest_signal_id, state, direction
-    INTO route_record
-    FROM railway_control.route_assignments
-    WHERE id = route_id_param;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Route not found: %', route_id_param;
-    END IF;
-
-    -- Log what locks are about to be released
-    FOR lock_record IN
-        SELECT id, resource_type, resource_id, lock_type, acquired_at, acquired_by
-        FROM railway_control.resource_locks
-        WHERE route_id = route_id_param AND is_active = TRUE
-    LOOP
-        -- Build details for each lock being released
-        lock_details := jsonb_build_object(
-            'lock_id', lock_record.id,
-            'resource_type', lock_record.resource_type,
-            'resource_id', lock_record.resource_id,
-            'lock_type', lock_record.lock_type,
-            'acquired_at', lock_record.acquired_at,
-            'acquired_by', lock_record.acquired_by,
-            'released_at', CURRENT_TIMESTAMP,
-            'lock_duration_seconds', EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - lock_record.acquired_at))
-        );
-
-        released_locks := released_locks || lock_details;
-        locks_released := locks_released + 1;
-    END LOOP;
-
-    -- Mark locks as inactive (better for audit than DELETE)
-    UPDATE railway_control.resource_locks
-    SET
-        is_active = FALSE,
-        released_at = CURRENT_TIMESTAMP,
-        released_by = operator_id_param,
-        release_reason = release_reason
-    WHERE route_id = route_id_param AND is_active = TRUE;
-
-    -- Log lock release event if any locks were released
-    IF locks_released > 0 THEN
-        INSERT INTO railway_control.route_events (
-            route_id,
-            event_type,
-            event_data,
-            operator_id,
-            source_component,
-            safety_critical
-        ) VALUES (
-            route_id_param,
-            'RESOURCE_LOCKS_RELEASED',
-            jsonb_build_object(
-                'locks_released_count', locks_released,
-                'released_locks', released_locks,
-                'release_reason', release_reason,
-                'route_state', route_record.state
-            ),
-            operator_id_param,
-            'DatabaseManager',
-            TRUE  -- Resource lock release is safety-critical
-        );
-
-        -- Additional audit logging for safety-critical operations
-        INSERT INTO railway_audit.event_log (
-            event_type,
-            entity_type,
-            entity_id,
-            entity_name,
-            old_values,
-            operator_id,
-            operation_source,
-            safety_critical,
-            event_details
-        ) VALUES (
-            'BULK_UPDATE',
-            'resource_locks',
-            route_id_param::TEXT,
-            CONCAT('Route Locks: ', route_record.source_signal_id, ' -> ', route_record.dest_signal_id),
-            jsonb_build_object(
-                'locks_released', released_locks,
-                'total_count', locks_released
-            ),
-            operator_id_param,
-            'DatabaseManager',
-            TRUE,
-            jsonb_build_object(
-                'operation', 'RELEASE_ALL_ROUTE_LOCKS',
-                'release_reason', release_reason,
-                'route_state', route_record.state,
-                'locks_released_count', locks_released
-            )
-        );
-    END IF;
-
-    RETURN locks_released;
-END;
-$$ LANGUAGE plpgsql;
-
--- 
--- RESOURCE LOCK ACQUISITION FUNCTION
--- 
-CREATE OR REPLACE FUNCTION railway_control.acquire_resource_lock(
-    resource_type_param VARCHAR,
-    resource_id_param VARCHAR,
-    route_id_param UUID,
-    lock_type_param VARCHAR DEFAULT 'ROUTE',  --   Changed default from 'EXCLUSIVE' to 'ROUTE'
-    operator_id_param VARCHAR DEFAULT 'system',
-    expires_at_param TIMESTAMP WITH TIME ZONE DEFAULT NULL
-)
-RETURNS BOOLEAN AS $$
-DECLARE
-    rows_affected INTEGER;
-    route_exists BOOLEAN;
-    resource_exists BOOLEAN;
-    conflicting_locks INTEGER;
-    lock_id UUID;
-BEGIN
-    -- Set operator context for audit logging
-    PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-    -- Validate resource type
-    IF resource_type_param NOT IN ('TRACK_CIRCUIT', 'POINT_MACHINE', 'SIGNAL') THEN
-        RAISE EXCEPTION 'Invalid resource type: %. Must be TRACK_CIRCUIT, POINT_MACHINE, or SIGNAL', resource_type_param;
-    END IF;
-
-    --   Validate lock type to match database schema
-    IF lock_type_param NOT IN ('ROUTE', 'OVERLAP', 'EMERGENCY', 'MAINTENANCE') THEN
-        RAISE EXCEPTION 'Invalid lock type: %. Must be ROUTE, OVERLAP, EMERGENCY, or MAINTENANCE', lock_type_param;
-    END IF;
-
-    -- Validate route exists
-    SELECT EXISTS(
-        SELECT 1 FROM railway_control.route_assignments
-        WHERE id = route_id_param
-    ) INTO route_exists;
-
-    IF NOT route_exists THEN
-        RAISE EXCEPTION 'Route not found: %', route_id_param;
-    END IF;
-
-    -- Validate resource exists based on type
-    CASE resource_type_param
-        WHEN 'TRACK_CIRCUIT' THEN
-            SELECT EXISTS(
-                SELECT 1 FROM railway_control.track_circuits
-                WHERE circuit_id = resource_id_param AND is_active = TRUE
-            ) INTO resource_exists;
-        WHEN 'POINT_MACHINE' THEN
-            SELECT EXISTS(
-                SELECT 1 FROM railway_control.point_machines
-                WHERE machine_id = resource_id_param
-            ) INTO resource_exists;
-        WHEN 'SIGNAL' THEN
-            SELECT EXISTS(
-                SELECT 1 FROM railway_control.signals
-                WHERE signal_id = resource_id_param AND is_active = TRUE
-            ) INTO resource_exists;
-    END CASE;
-
-    IF NOT resource_exists THEN
-        RAISE EXCEPTION 'Resource not found or inactive: % %', resource_type_param, resource_id_param;
-    END IF;
-
-    --   Update conflict detection logic for new lock types
-    SELECT COUNT(*) INTO conflicting_locks
-    FROM railway_control.resource_locks
-    WHERE resource_type = resource_type_param
-    AND resource_id = resource_id_param
-    AND is_active = TRUE
-    AND (
-        -- ROUTE locks conflict with any other ROUTE lock (exclusive for routes)
-        (lock_type = 'ROUTE' AND lock_type_param = 'ROUTE')
-        -- EMERGENCY locks override everything
-        OR lock_type = 'EMERGENCY'
-        OR lock_type_param = 'EMERGENCY'
-        -- MAINTENANCE locks conflict with ROUTE locks
-        OR (lock_type = 'MAINTENANCE' AND lock_type_param = 'ROUTE')
-        OR (lock_type = 'ROUTE' AND lock_type_param = 'MAINTENANCE')
-    );
-
-    IF conflicting_locks > 0 THEN
-        RAISE EXCEPTION 'Resource % % is already locked with conflicting lock type', resource_type_param, resource_id_param;
-    END IF;
-
-    -- Generate lock ID
-    lock_id := gen_random_uuid();
-
-    -- Insert resource lock
-    INSERT INTO railway_control.resource_locks (
-        id,
-        resource_type,
-        resource_id,
-        route_id,
-        lock_type,
-        acquired_at,
-        acquired_by,
-        expires_at,
-        is_active
-    ) VALUES (
-        lock_id,
-        resource_type_param,
-        resource_id_param,
-        route_id_param,
-        lock_type_param,
-        CURRENT_TIMESTAMP,
-        operator_id_param,
-        expires_at_param,
-        TRUE
-    );
-
-    GET DIAGNOSTICS rows_affected = ROW_COUNT;
-
-    --   Log lock acquisition using correct column names
-    IF rows_affected > 0 THEN
-        INSERT INTO railway_control.route_events (
-            route_id,
-            event_type,
-            event_data,
-            triggered_by,        --   Use correct column name
-            occurred_at          --   Use correct column name
-        ) VALUES (
-            route_id_param,
-            'RESOURCE_LOCKED',
-            jsonb_build_object(
-                'lock_id', lock_id,
-                'resource_type', resource_type_param,
-                'resource_id', resource_id_param,
-                'lock_type', lock_type_param,
-                'expires_at', expires_at_param,
-                'operator', operator_id_param,
-                'source', 'DatabaseManager',
-                'safety_critical', TRUE
-            ),
-            operator_id_param,   -- Maps to triggered_by
-            CURRENT_TIMESTAMP    -- Maps to occurred_at
-        );
-
-        -- Additional audit logging for safety-critical operations
-        INSERT INTO railway_audit.event_log (
-            event_type,
-            entity_type,
-            entity_id,
-            entity_name,
-            new_values,
-            operator_id,
-            operation_source,
-            safety_critical,
-            event_details
-        ) VALUES (
-            'INSERT',
-            'resource_locks',
-            lock_id::TEXT,
-            CONCAT(resource_type_param, ': ', resource_id_param),
-            jsonb_build_object(
-                'id', lock_id,
-                'resource_type', resource_type_param,
-                'resource_id', resource_id_param,
-                'route_id', route_id_param,
-                'lock_type', lock_type_param
-            ),
-            operator_id_param,
-            'DatabaseManager',
-            TRUE,
-            jsonb_build_object(
-                'lock_acquisition_time', CURRENT_TIMESTAMP,
-                'conflicting_locks_checked', conflicting_locks
-            )
-        );
-    END IF;
-
-    RETURN rows_affected > 0;
-END;
-$$ LANGUAGE plpgsql;
-
--- 
+-- ============================================================================
 -- ROUTE EVENT LOGGING FUNCTION
--- 
+-- ============================================================================
 CREATE OR REPLACE FUNCTION railway_control.insert_route_event(
     route_id_param UUID,
     event_type_param VARCHAR,
@@ -1814,129 +1000,40 @@ RETURNS BOOLEAN AS $$
 DECLARE
     rows_affected INTEGER;
     route_exists BOOLEAN;
-    function_start_time TIMESTAMP := CURRENT_TIMESTAMP;
-    step_name VARCHAR := 'INITIALIZATION';
-    error_context TEXT;
-    route_info RECORD;
 BEGIN
-    --  COMPREHENSIVE LOGGING: Function entry
-    RAISE NOTICE '[insert_route_event]  EVENT LOGGING START: Route: %, Type: %, Critical: %',
-        route_id_param, event_type_param, safety_critical_param;
-    RAISE NOTICE '[insert_route_event]  Source: %, Operator: %, Correlation: %',
-        source_component_param, operator_id_param, correlation_id_param;
-
-    --  PARAMETER VALIDATION
-    step_name := 'PARAMETER_VALIDATION';
-
-    IF route_id_param IS NULL THEN
-        error_context := 'route_id_param cannot be NULL';
-        RAISE EXCEPTION '[insert_route_event]  VALIDATION_ERROR: %', error_context;
-    END IF;
-
-    IF event_type_param IS NULL OR event_type_param = '' THEN
-        error_context := 'event_type_param cannot be NULL or empty';
-        RAISE EXCEPTION '[insert_route_event]  VALIDATION_ERROR: %', error_context;
-    END IF;
-
-    -- Validate event type
-    IF event_type_param NOT IN (
-        'ROUTE_REQUESTED', 'VALIDATION_STARTED', 'VALIDATION_COMPLETED',
-        'PATHFINDING_COMPLETED', 'RESOURCE_LOCKED', 'ROUTE_RESERVED',
-        'POINT_MACHINE_MOVED', 'TRACK_CIRCUIT_OCCUPIED', 'ROUTE_ACTIVATED',
-        'MAIN_ROUTE_CLEARED', 'OVERLAP_TIMER_STARTED', 'OVERLAP_RELEASED',
-        'ROUTE_RELEASED', 'ROUTE_FAILED', 'EMERGENCY_RELEASE',
-        'PERFORMANCE_WARNING', 'SAFETY_VIOLATION'
-    ) THEN
-        error_context := 'Invalid event_type: ' || event_type_param;
-        RAISE EXCEPTION '[insert_route_event]  INVALID_EVENT_TYPE: %', error_context;
-    END IF;
-
-    RAISE NOTICE '[insert_route_event]  Parameter validation completed';
-
-    --  ROUTE EXISTENCE CHECK WITH DETAILS
-    step_name := 'ROUTE_EXISTENCE_CHECK';
-
-    SELECT
-        EXISTS(SELECT 1 FROM railway_control.route_assignments WHERE id = route_id_param),
-        (SELECT source_signal_id || ' → ' || dest_signal_id || ' (' || state || ')'
-         FROM railway_control.route_assignments WHERE id = route_id_param LIMIT 1)
-    INTO route_exists, error_context;
+    -- Validate route exists
+    SELECT EXISTS(
+        SELECT 1 FROM railway_control.route_assignments
+        WHERE id = route_id_param
+    ) INTO route_exists;
 
     IF NOT route_exists THEN
-        --  DETAILED ROUTE SEARCH
-        RAISE NOTICE '[insert_route_event]  Route not found. Searching for similar routes...';
-
-        -- Check if any route exists at all
-        IF NOT EXISTS(SELECT 1 FROM railway_control.route_assignments LIMIT 1) THEN
-            error_context := 'No routes exist in route_assignments table at all';
-        ELSE
-            -- Show existing routes for debugging
-            error_context := 'Route not found: ' || route_id_param || '. Existing routes: ';
-            FOR route_info IN
-                SELECT id, source_signal_id, dest_signal_id, state, created_at
-                FROM railway_control.route_assignments
-                ORDER BY created_at DESC LIMIT 3
-            LOOP
-                error_context := error_context || '(' || route_info.id || ': ' ||
-                    route_info.source_signal_id || '→' || route_info.dest_signal_id ||
-                    ' [' || route_info.state || ']) ';
-            END LOOP;
-        END IF;
-
-        RAISE EXCEPTION '[insert_route_event]  ROUTE_NOT_FOUND: %', error_context;
+        RAISE EXCEPTION 'Route not found for event logging: %', route_id_param;
     END IF;
 
-    RAISE NOTICE '[insert_route_event]  Route found: %', error_context;
-
-    --  EVENT INSERTION
-    step_name := 'EVENT_INSERTION';
-    RAISE NOTICE '[insert_route_event]  Inserting route event...';
-
-    BEGIN
-        INSERT INTO railway_control.route_events (
-            route_id,
-            event_type,
-            event_data,
-            triggered_by,
-            occurred_at
-        ) VALUES (
-            route_id_param,
-            event_type_param,
-            COALESCE(event_data_param, '{}'),
-            COALESCE(operator_id_param, 'system'),
-            CURRENT_TIMESTAMP
-        );
-
-        GET DIAGNOSTICS rows_affected = ROW_COUNT;
-        RAISE NOTICE '[insert_route_event]  Event insertion completed. Rows affected: %', rows_affected;
-
-    EXCEPTION WHEN OTHERS THEN
-        error_context := 'Event insertion failed: ' || SQLERRM;
-        RAISE EXCEPTION '[insert_route_event]  EVENT_INSERTION_FAILED: %', error_context;
-    END;
-
-    --  SUCCESS
-    RAISE NOTICE '[insert_route_event]  FUNCTION SUCCESS: Event % logged for route % in % ms',
-        event_type_param, route_id_param,
-        EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - function_start_time)) * 1000;
-
-    RETURN rows_affected > 0;
-
-EXCEPTION WHEN OTHERS THEN
-    --  COMPREHENSIVE ERROR HANDLING
-    error_context := COALESCE(error_context, SQLERRM);
-    RAISE EXCEPTION '[insert_route_event]  CRITICAL_ERROR at step [%]: % | SQL State: % | Route: % | Event: % | Duration: % ms',
-        step_name,
-        error_context,
-        SQLSTATE,
+    -- ✅ FIXED: Use actual table column names
+    INSERT INTO railway_control.route_events (
+        route_id,
+        event_type,
+        event_data,
+        triggered_by,        -- ✅ FIXED: Use actual column name
+        occurred_at          -- ✅ FIXED: Use actual column name
+    ) VALUES (
         route_id_param,
         event_type_param,
-        EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - function_start_time)) * 1000;
+        COALESCE(event_data_param, '{}'),
+        COALESCE(operator_id_param, 'system'),
+        CURRENT_TIMESTAMP
+    );
+
+    GET DIAGNOSTICS rows_affected = ROW_COUNT;
+    RETURN rows_affected > 0;
 END;
 $$ LANGUAGE plpgsql;
--- 
+
+-- ============================================================================
 -- ROUTE ASSIGNMENT CREATION FUNCTION (Simplified)
--- 
+-- ============================================================================
 CREATE OR REPLACE FUNCTION railway_control.insert_route_assignment(
     route_id_param UUID,
     source_signal_id_param VARCHAR,
@@ -1952,132 +1049,48 @@ CREATE OR REPLACE FUNCTION railway_control.insert_route_assignment(
 RETURNS BOOLEAN AS $$
 DECLARE
     rows_affected INTEGER;
-    function_start_time TIMESTAMP := CURRENT_TIMESTAMP;
-    step_name VARCHAR := 'INITIALIZATION';
-    error_context TEXT;
 BEGIN
-    --  COMPREHENSIVE LOGGING: Function entry
-    RAISE NOTICE '[insert_route_assignment]  FUNCTION START: Route ID: %, Source: % → Dest: %',
-        route_id_param, source_signal_id_param, dest_signal_id_param;
-    RAISE NOTICE '[insert_route_assignment]  Parameters: Direction: %, State: %, Priority: %, Operator: %',
-        direction_param, state_param, priority_param, operator_id_param;
-    RAISE NOTICE '[insert_route_assignment]  Circuits: % (overlap: %)',
-        assigned_circuits_param, overlap_circuits_param;
-    RAISE NOTICE '[insert_route_assignment]  Point Machines: %', locked_point_machines_param;
-
-    --  PARAMETER VALIDATION
-    step_name := 'PARAMETER_VALIDATION';
-
-    IF route_id_param IS NULL THEN
-        error_context := 'route_id_param cannot be NULL';
-        RAISE EXCEPTION '[insert_route_assignment]  VALIDATION_ERROR: %', error_context;
-    END IF;
-
-    IF source_signal_id_param IS NULL OR source_signal_id_param = '' THEN
-        error_context := 'source_signal_id_param cannot be NULL or empty';
-        RAISE EXCEPTION '[insert_route_assignment]  VALIDATION_ERROR: %', error_context;
-    END IF;
-
-    IF dest_signal_id_param IS NULL OR dest_signal_id_param = '' THEN
-        error_context := 'dest_signal_id_param cannot be NULL or empty';
-        RAISE EXCEPTION '[insert_route_assignment]  VALIDATION_ERROR: %', error_context;
-    END IF;
-
-    --  SIGNAL EXISTENCE VALIDATION
-    step_name := 'SIGNAL_VALIDATION';
-
-    IF NOT EXISTS(SELECT 1 FROM railway_control.signals WHERE signal_id = source_signal_id_param) THEN
-        error_context := 'Source signal does not exist: ' || source_signal_id_param;
-        RAISE EXCEPTION '[insert_route_assignment]  SIGNAL_NOT_FOUND: %', error_context;
-    END IF;
-
-    IF NOT EXISTS(SELECT 1 FROM railway_control.signals WHERE signal_id = dest_signal_id_param) THEN
-        error_context := 'Destination signal does not exist: ' || dest_signal_id_param;
-        RAISE EXCEPTION '[insert_route_assignment]  SIGNAL_NOT_FOUND: %', error_context;
-    END IF;
-
-    RAISE NOTICE '[insert_route_assignment]  Parameter validation completed successfully';
-
-    --  DUPLICATE CHECK
-    step_name := 'DUPLICATE_CHECK';
-
-    IF EXISTS(SELECT 1 FROM railway_control.route_assignments WHERE id = route_id_param) THEN
-        error_context := 'Route with this ID already exists: ' || route_id_param;
-        RAISE EXCEPTION '[insert_route_assignment]  DUPLICATE_ROUTE: %', error_context;
-    END IF;
-
-    RAISE NOTICE '[insert_route_assignment]  Duplicate check passed';
-
-    --  SET OPERATOR CONTEXT
-    step_name := 'OPERATOR_CONTEXT';
+    -- Set operator context for audit logging
     PERFORM set_config('railway.operator_id', operator_id_param, true);
-    RAISE NOTICE '[insert_route_assignment]  Operator context set: %', operator_id_param;
 
-    --  ROUTE INSERTION
-    step_name := 'ROUTE_INSERTION';
-    RAISE NOTICE '[insert_route_assignment]  Starting route insertion...';
+    -- Insert route assignment
+    INSERT INTO railway_control.route_assignments (
+        id,
+        source_signal_id,
+        dest_signal_id,
+        direction,
+        assigned_circuits,
+        overlap_circuits,
+        state,
+        locked_point_machines,
+        priority,
+        operator_id,
+        created_at
+    ) VALUES (
+        route_id_param,
+        source_signal_id_param,
+        dest_signal_id_param,
+        direction_param,
+        assigned_circuits_param,
+        COALESCE(overlap_circuits_param, '{}'),
+        state_param,
+        COALESCE(locked_point_machines_param, '{}'),
+        priority_param,
+        operator_id_param,
+        CURRENT_TIMESTAMP
+    );
 
-    BEGIN
-        INSERT INTO railway_control.route_assignments (
-            id,
-            source_signal_id,
-            dest_signal_id,
-            direction,
-            assigned_circuits,
-            overlap_circuits,
-            state,
-            locked_point_machines,
-            priority,
-            operator_id,
-            created_at
-        ) VALUES (
-            route_id_param,
-            source_signal_id_param,
-            dest_signal_id_param,
-            direction_param,
-            assigned_circuits_param,
-            COALESCE(overlap_circuits_param, '{}'),
-            state_param,
-            COALESCE(locked_point_machines_param, '{}'),
-            priority_param,
-            operator_id_param,
-            CURRENT_TIMESTAMP
-        );
+    GET DIAGNOSTICS rows_affected = ROW_COUNT;
 
-        GET DIAGNOSTICS rows_affected = ROW_COUNT;
-        RAISE NOTICE '[insert_route_assignment]  Route insertion completed. Rows affected: %', rows_affected;
-
-    EXCEPTION WHEN OTHERS THEN
-        error_context := 'Route insertion failed: ' || SQLERRM;
-        RAISE EXCEPTION '[insert_route_assignment]  INSERTION_FAILED at %: %', step_name, error_context;
-    END;
-
-    --  INSERTION VERIFICATION
-    step_name := 'INSERTION_VERIFICATION';
-
-    IF rows_affected = 0 THEN
-        error_context := 'No rows were inserted - unknown error';
-        RAISE EXCEPTION '[insert_route_assignment]  NO_ROWS_INSERTED: %', error_context;
-    END IF;
-
-    -- Verify the route actually exists
-    IF NOT EXISTS(SELECT 1 FROM railway_control.route_assignments WHERE id = route_id_param) THEN
-        error_context := 'Route was not found after insertion - possible rollback';
-        RAISE EXCEPTION '[insert_route_assignment]  VERIFICATION_FAILED: %', error_context;
-    END IF;
-
-    RAISE NOTICE '[insert_route_assignment]  Route insertion verified successfully';
-
-    --  EVENT LOGGING
-    step_name := 'EVENT_LOGGING';
-
-    BEGIN
+    -- Log route creation event
+    IF rows_affected > 0 THEN
+        -- ✅ FIXED: Use actual table column names
         INSERT INTO railway_control.route_events (
             route_id,
             event_type,
             event_data,
-            triggered_by,
-            occurred_at
+            triggered_by,        -- ✅ FIXED: Use actual column name
+            occurred_at          -- ✅ FIXED: Use actual column name
         ) VALUES (
             route_id_param,
             'ROUTE_REQUESTED',
@@ -2088,40 +1101,19 @@ BEGIN
                 'assigned_circuits_count', array_length(assigned_circuits_param, 1),
                 'priority', priority_param,
                 'initial_state', state_param,
-                'operator', operator_id_param,
-                'function_duration_ms', EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - function_start_time)) * 1000
+                'operator', operator_id_param
             ),
-            operator_id_param,
-            CURRENT_TIMESTAMP
+            operator_id_param,   -- ✅ FIXED: Maps to triggered_by
+            CURRENT_TIMESTAMP    -- ✅ FIXED: Maps to occurred_at
         );
-
-        RAISE NOTICE '[insert_route_assignment]  Route event logged successfully';
-
-    EXCEPTION WHEN OTHERS THEN
-        -- Don't fail the whole function if event logging fails
-        RAISE WARNING '[insert_route_assignment]  Event logging failed: %', SQLERRM;
-    END;
-
-    --  SUCCESS
-    RAISE NOTICE '[insert_route_assignment]  FUNCTION SUCCESS: Route % created in % ms',
-        route_id_param, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - function_start_time)) * 1000;
+    END IF;
 
     RETURN rows_affected > 0;
-
-EXCEPTION WHEN OTHERS THEN
-    --  COMPREHENSIVE ERROR HANDLING
-    error_context := COALESCE(error_context, SQLERRM);
-    RAISE EXCEPTION '[insert_route_assignment]  CRITICAL_ERROR at step [%]: % | SQL State: % | Route: % | Duration: % ms',
-        step_name,
-        error_context,
-        SQLSTATE,
-        route_id_param,
-        EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - function_start_time)) * 1000;
 END;
 $$ LANGUAGE plpgsql;
--- 
+-- ============================================================================
 -- HELPER FUNCTION: VALIDATE STATE TRANSITIONS
--- 
+-- ============================================================================
 CREATE OR REPLACE FUNCTION railway_control.is_valid_route_state_transition(
     current_state VARCHAR,
     new_state VARCHAR
@@ -2145,9 +1137,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 
+-- ============================================================================
 -- TRIGGERS
--- 
+-- ============================================================================
 
 -- Basic update triggers
 CREATE TRIGGER trg_event_log_set_date
@@ -2224,9 +1216,9 @@ CREATE TRIGGER trg_route_assignments_notify
     AFTER INSERT OR UPDATE OR DELETE ON railway_control.route_assignments
     FOR EACH ROW EXECUTE FUNCTION railway_control.notify_route_changes();
 
--- 
+-- ============================================================================
 -- VIEWS
--- 
+-- ============================================================================
 
 -- Enhanced track segments with complete route assignment integration
 CREATE OR REPLACE VIEW railway_control.v_track_segments_with_occupancy AS
@@ -2568,9 +1560,9 @@ FROM railway_audit.event_log el
 WHERE el.event_timestamp >= (CURRENT_TIMESTAMP - INTERVAL '24 hours')
 ORDER BY el.event_timestamp DESC;
 
--- 
+-- ============================================================================
 -- INITIAL CONFIGURATION DATA
--- 
+-- ============================================================================
 
 -- Insert default route configuration
 INSERT INTO railway_control.route_configuration (config_key, config_value, config_type, description, updated_by) VALUES
@@ -2586,9 +1578,9 @@ INSERT INTO railway_control.route_configuration (config_key, config_value, confi
 ('safety_violation_max_rate', '0.05', 'VITAL', 'Maximum allowed safety violation rate (5%)', 'system')
 ON CONFLICT (config_key) DO NOTHING;
 
--- 
+-- ============================================================================
 -- SECURITY: Create roles and permissions
--- 
+-- ============================================================================
 
 -- Railway Control Operator (full access to operations)
 CREATE ROLE railway_operator;
@@ -2615,10 +1607,10 @@ COMMENT ON SCHEMA railway_control IS 'Main railway control system with integrate
 COMMENT ON SCHEMA railway_audit IS 'Audit trail and event logging for compliance';
 COMMENT ON SCHEMA railway_config IS 'Configuration and lookup tables';
 
--- 
+-- ============================================================================
 -- UNIFIED SCHEMA CREATION COMPLETED
--- 
+-- ============================================================================
 -- This unified script creates a complete railway control system database
 -- with integrated route assignment capabilities from the ground up.
 -- No ALTER statements needed - everything is created in final form.
--- 
+-- ============================================================================
