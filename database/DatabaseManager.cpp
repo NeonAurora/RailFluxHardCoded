@@ -549,12 +549,12 @@ bool DatabaseManager::isPortableServerRunning()
 QVariantList DatabaseManager::getTrackSegmentsList() {
     if (!connected) return QVariantList();
 
-    qDebug() << " SAFETY: getTrackSegmentsList() - DIRECT DATABASE QUERY with locking status";
+    qDebug() << " SAFETY: getTrackSegmentsList() - DIRECT DATABASE QUERY with simplified locking status";
 
     QVariantList trackSegments;
     QSqlQuery trackSegmentQuery(db);
 
-    //   UPDATED: Query with new locking schema fields
+    // UPDATED: Simplified query without resource_locks table
     QString trackSegmentSql = R"(
         SELECT
             ts.id,
@@ -566,7 +566,7 @@ QVariantList DatabaseManager::getTrackSegmentsList() {
             ts.end_col,
             ts.track_segment_type,
             ts.is_assigned,
-            ts.is_overlap,  --   NEW: Track segment overlap status
+            ts.is_overlap,
             ts.is_active,
             ts.circuit_id,
 
@@ -579,25 +579,33 @@ QVariantList DatabaseManager::getTrackSegmentsList() {
 
             -- Circuit status information
             COALESCE(tc.is_occupied, false) as is_occupied,
-            COALESCE(tc.is_assigned, false) as circuit_is_assigned,  --   NEW
-            COALESCE(tc.is_overlap, false) as circuit_is_overlap,    --   NEW
+            COALESCE(tc.is_assigned, false) as circuit_is_assigned,
+            COALESCE(tc.is_overlap, false) as circuit_is_overlap,
             tc.occupied_by,
 
-            --   UPDATED: Enhanced route assignment eligibility logic
+            -- Route context (optional - if you want route information)
+            ra.id as route_id,
+            ra.state as route_state,
+            ra.source_signal_id as route_source_signal,
+            ra.dest_signal_id as route_dest_signal,
+
+            -- SIMPLIFIED: Route assignment eligibility logic (NO resource_locks)
             CASE
                 WHEN tc.is_occupied = true THEN false
-                WHEN tc.is_assigned = true OR tc.is_overlap = true THEN false  --   NEW: Consider circuit locking
-                WHEN ts.is_assigned = true OR ts.is_overlap = true THEN false  --   NEW: Consider segment locking
-                WHEN rl.is_active = true THEN false
+                WHEN tc.is_assigned = true OR tc.is_overlap = true THEN false
+                WHEN ts.is_assigned = true OR ts.is_overlap = true THEN false
+                WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN false
+                WHEN NOT ts.is_active OR NOT tc.is_active THEN false
                 ELSE true
             END as route_assignment_eligible
 
         FROM railway_control.track_segments ts
         LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
-        LEFT JOIN railway_control.resource_locks rl ON (
-            rl.resource_type = 'TRACK_CIRCUIT'
-            AND rl.resource_id = tc.circuit_id
-            AND rl.is_active = true
+        -- REMOVED: resource_locks JOIN entirely
+        -- OPTIONAL: Add route context if needed
+        LEFT JOIN railway_control.route_assignments ra ON (
+            tc.circuit_id = ANY(ra.assigned_circuits)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
         )
         WHERE ts.is_active = TRUE
         ORDER BY ts.segment_id
@@ -607,7 +615,7 @@ QVariantList DatabaseManager::getTrackSegmentsList() {
         while (trackSegmentQuery.next()) {
             trackSegments.append(convertTrackSegmentRowToVariant(trackSegmentQuery));
         }
-        qDebug() << "  Loaded" << trackSegments.size() << "track segments with occupancy and locking data";
+        qDebug() << "  Loaded" << trackSegments.size() << "track segments with simplified locking data";
     } else {
         qWarning() << " SAFETY CRITICAL: Track Segment query failed:" << trackSegmentQuery.lastError().text();
     }
@@ -679,12 +687,12 @@ QVariantList DatabaseManager::getAllSignalsList() {
 QVariantList DatabaseManager::getAllPointMachinesList() {
     if (!connected) return QVariantList();
 
-    qDebug() << "SAFETY: getAllPointMachinesList() - DIRECT DATABASE QUERY from v_point_machines_complete";
+    qDebug() << "SAFETY: getAllPointMachinesList() - Using refactored v_point_machines_complete view";
 
     QVariantList points;
     QSqlQuery pointQuery(db);
 
-    // ? UPDATED: Query the complete view with all route assignment fields
+    // UPDATED: Query the refactored view (removed resource_locks fields)
     QString pointSql = R"(
         SELECT
             id,
@@ -729,13 +737,13 @@ QVariantList DatabaseManager::getAllPointMachinesList() {
             paired_operating_status,
             paired_is_locked,
 
-            -- Resource lock status
-            is_route_locked,
-            locked_by_route_id,
-            route_lock_type,
-            route_locked_at,
-            route_locked_by,
-            route_lock_expires_at,
+            -- REMOVED: Resource lock fields (no longer exist in view)
+            -- is_route_locked,
+            -- locked_by_route_id,
+            -- route_lock_type,
+            -- route_locked_at,
+            -- route_locked_by,
+            -- route_lock_expires_at,
 
             -- Route assignment context
             route_source_signal,
@@ -762,9 +770,9 @@ QVariantList DatabaseManager::getAllPointMachinesList() {
         while (pointQuery.next()) {
             points.append(convertPointMachineRowToVariant(pointQuery));
         }
-        qDebug() << "? Loaded" << points.size() << "point machines with complete route assignment information";
+        qDebug() << "✓ Loaded" << points.size() << "point machines with simplified route assignment information";
     } else {
-        qWarning() << "? SAFETY CRITICAL: Point machine complete view query failed:" << pointQuery.lastError().text();
+        qWarning() << "✗ SAFETY CRITICAL: Point machine view query failed:" << pointQuery.lastError().text();
     }
 
     return points;
@@ -915,7 +923,7 @@ QVariantMap DatabaseManager::getSignalById(const QString& signalId) {
 QVariantMap DatabaseManager::getTrackSegmentById(const QString& trackSegmentId) {
     if (!connected) return QVariantMap();
 
-    qDebug() << " QUERY: getTrackSegmentById(" << trackSegmentId << ") - with locking status";
+    qDebug() << " QUERY: getTrackSegmentById(" << trackSegmentId << ") - with simplified locking status";
 
     QSqlQuery query(db);
     query.prepare(R"(
@@ -940,25 +948,33 @@ QVariantMap DatabaseManager::getTrackSegmentById(const QString& trackSegmentId) 
 
             -- Circuit status information
             COALESCE(tc.is_occupied, false) as is_occupied,
-            COALESCE(tc.is_assigned, false) as circuit_is_assigned,  -- ? NEW
-            COALESCE(tc.is_overlap, false) as circuit_is_overlap,    -- ? NEW
+            COALESCE(tc.is_assigned, false) as circuit_is_assigned,
+            COALESCE(tc.is_overlap, false) as circuit_is_overlap,
             tc.occupied_by,
 
-            -- ? UPDATED: Enhanced route assignment eligibility logic
+            -- Route context (optional)
+            ra.id as route_id,
+            ra.state as route_state,
+            ra.source_signal_id as route_source_signal,
+            ra.dest_signal_id as route_dest_signal,
+
+            -- SIMPLIFIED: Route assignment eligibility logic (NO resource_locks)
             CASE
                 WHEN tc.is_occupied = true THEN false
-                WHEN tc.is_assigned = true OR tc.is_overlap = true THEN false  -- ? NEW: Consider circuit locking
-                WHEN ts.is_assigned = true OR ts.is_overlap = true THEN false  -- ? NEW: Consider segment locking
-                WHEN rl.is_active = true THEN false
+                WHEN tc.is_assigned = true OR tc.is_overlap = true THEN false
+                WHEN ts.is_assigned = true OR ts.is_overlap = true THEN false
+                WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN false
+                WHEN NOT ts.is_active OR NOT tc.is_active THEN false
                 ELSE true
             END as route_assignment_eligible
 
         FROM railway_control.track_segments ts
         LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
-        LEFT JOIN railway_control.resource_locks rl ON (
-            rl.resource_type = 'TRACK_CIRCUIT'
-            AND rl.resource_id = tc.circuit_id
-            AND rl.is_active = true
+        -- REMOVED: resource_locks JOIN entirely
+        -- OPTIONAL: Add route context if needed
+        LEFT JOIN railway_control.route_assignments ra ON (
+            tc.circuit_id = ANY(ra.assigned_circuits)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
         )
         WHERE ts.segment_id = ?
     )");
@@ -976,11 +992,11 @@ QVariantMap DatabaseManager::getTrackSegmentById(const QString& trackSegmentId) 
 QVariantMap DatabaseManager::getPointMachineById(const QString& machineId) {
     if (!connected) return QVariantMap();
 
-    qDebug() << "SAFETY: getPointMachineById(" << machineId << ") - DIRECT DATABASE QUERY";
+    qDebug() << "SAFETY: getPointMachineById(" << machineId << ") - Using refactored view";
 
     QSqlQuery query(db);
 
-    //  Added paired_entity to SELECT statement
+    // UPDATED: Query the refactored view (removed resource_locks fields)
     query.prepare(R"(
         SELECT
             id,
@@ -1025,13 +1041,13 @@ QVariantMap DatabaseManager::getPointMachineById(const QString& machineId) {
             paired_operating_status,
             paired_is_locked,
 
-            -- Resource lock status
-            is_route_locked,
-            locked_by_route_id,
-            route_lock_type,
-            route_locked_at,
-            route_locked_by,
-            route_lock_expires_at,
+            -- REMOVED: Resource lock fields (no longer exist in view)
+            -- is_route_locked,
+            -- locked_by_route_id,
+            -- route_lock_type,
+            -- route_locked_at,
+            -- route_locked_by,
+            -- route_lock_expires_at,
 
             -- Route assignment context
             route_source_signal,
@@ -1050,8 +1066,8 @@ QVariantMap DatabaseManager::getPointMachineById(const QString& machineId) {
             created_at,
             updated_at
 
-        FROM railway_control.v_point_machines_complete pm
-        WHERE pm.machine_id = ?
+        FROM railway_control.v_point_machines_complete
+        WHERE machine_id = ?
     )");
     query.addBindValue(machineId);
 
@@ -1971,7 +1987,7 @@ QVariantMap DatabaseManager::convertSignalRowToVariant(const QSqlQuery& query) {
 QVariantMap DatabaseManager::convertTrackSegmentRowToVariant(const QSqlQuery& query) {
     QVariantMap trackSegment;
 
-    //   BASIC SEGMENT INFO
+    // BASIC SEGMENT INFO
     trackSegment["id"] = query.value("segment_id").toString();
     trackSegment["name"] = query.value("segment_name").toString();
     trackSegment["startRow"] = query.value("start_row").toDouble();
@@ -1982,28 +1998,36 @@ QVariantMap DatabaseManager::convertTrackSegmentRowToVariant(const QSqlQuery& qu
     trackSegment["isActive"] = query.value("is_active").toBool();
     trackSegment["circuitId"] = query.value("circuit_id").toString();
 
-    //   SEGMENT ASSIGNMENT AND LOCKING STATUS
+    // SEGMENT ASSIGNMENT AND LOCKING STATUS
     trackSegment["assigned"] = query.value("is_assigned").toBool();
-    trackSegment["isOverlap"] = query.value("is_overlap").toBool();  //   NEW: Segment overlap status
+    trackSegment["isOverlap"] = query.value("is_overlap").toBool();
 
-    //   CIRCUIT OCCUPANCY AND LOCKING STATUS
+    // CIRCUIT OCCUPANCY AND LOCKING STATUS
     trackSegment["occupied"] = query.value("is_occupied").toBool();
     trackSegment["occupiedBy"] = query.value("occupied_by").toString();
-    trackSegment["circuitIsAssigned"] = query.value("circuit_is_assigned").toBool();  //   NEW: Circuit assignment status
-    trackSegment["circuitIsOverlap"] = query.value("circuit_is_overlap").toBool();    //   NEW: Circuit overlap status
+    trackSegment["circuitIsAssigned"] = query.value("circuit_is_assigned").toBool();
+    trackSegment["circuitIsOverlap"] = query.value("circuit_is_overlap").toBool();
 
-    //   PHYSICAL PROPERTIES
+    // PHYSICAL PROPERTIES
     trackSegment["lengthMeters"] = query.value("length_meters").toDouble();
     trackSegment["maxSpeedKmh"] = query.value("max_speed_kmh").toInt();
 
-    //   TIMESTAMPS
+    // TIMESTAMPS
     trackSegment["createdAt"] = query.value("created_at").toString();
     trackSegment["updatedAt"] = query.value("updated_at").toString();
 
-    //   ROUTE ASSIGNMENT STATUS
+    // ROUTE ASSIGNMENT STATUS
     trackSegment["routeAssignmentEligible"] = query.value("route_assignment_eligible").toBool();
 
-    //   HANDLE PROTECTING_SIGNALS ARRAY
+    // OPTIONAL: Route context (if included in query)
+    if (!query.value("route_id").toString().isEmpty()) {
+        trackSegment["routeId"] = query.value("route_id").toString();
+        trackSegment["routeState"] = query.value("route_state").toString();
+        trackSegment["routeSourceSignal"] = query.value("route_source_signal").toString();
+        trackSegment["routeDestSignal"] = query.value("route_dest_signal").toString();
+    }
+
+    // HANDLE PROTECTING_SIGNALS ARRAY
     QString protectingSignalsStr = query.value("protecting_signals").toString();
     if (!protectingSignalsStr.isEmpty()) {
         protectingSignalsStr = protectingSignalsStr.mid(1, protectingSignalsStr.length() - 2); // Remove { }
@@ -2023,13 +2047,13 @@ QVariantMap DatabaseManager::convertTrackSegmentRowToVariant(const QSqlQuery& qu
 QVariantMap DatabaseManager::convertPointMachineRowToVariant(const QSqlQuery& query) {
     QVariantMap pm;
 
-    //   BASIC MACHINE INFO
+    // BASIC MACHINE INFO
     pm["id"] = query.value("machine_id").toString();
     pm["name"] = query.value("machine_name").toString();
     pm["operatingStatus"] = query.value("operating_status").toString();
     pm["transitionTime"] = query.value("transition_time_ms").toInt();
 
-    //   POSITION INFORMATION (Enhanced)
+    // POSITION INFORMATION (Enhanced)
     pm["position"] = query.value("current_position").toString();
     pm["currentPosition"] = query.value("current_position").toString();
     pm["currentPositionName"] = query.value("current_position_name").toString();
@@ -2037,16 +2061,16 @@ QVariantMap DatabaseManager::convertPointMachineRowToVariant(const QSqlQuery& qu
     pm["positionPathfindingWeight"] = query.value("position_pathfinding_weight").toDouble();
     pm["positionDefaultTransitionTime"] = query.value("position_default_transition_time_ms").toInt();
 
-    //   OPERATIONAL STATUS AND TIMING
+    // OPERATIONAL STATUS AND TIMING
     pm["lastOperatedAt"] = query.value("last_operated_at").toString();
     pm["lastOperatedBy"] = query.value("last_operated_by").toString();
     pm["operationCount"] = query.value("operation_count").toInt();
 
-    //   LOCKING AND SAFETY
+    // LOCKING AND SAFETY
     pm["isLocked"] = query.value("is_locked").toBool();
     pm["lockReason"] = query.value("lock_reason").toString();
 
-    //   ROUTE ASSIGNMENT EXTENSIONS
+    // ROUTE ASSIGNMENT EXTENSIONS
     QString pairedEntity = query.value("paired_entity").toString();
     pm["pairedEntity"] = pairedEntity.isEmpty() ? QVariant() : pairedEntity;
     pm["isPaired"] = !pairedEntity.isEmpty();
@@ -2054,48 +2078,51 @@ QVariantMap DatabaseManager::convertPointMachineRowToVariant(const QSqlQuery& qu
     pm["routeLockingEnabled"] = query.value("route_locking_enabled").toBool();
     pm["autoNormalizeAfterRoute"] = query.value("auto_normalize_after_route").toBool();
 
-    //   PAIRED ENTITY INFORMATION
+    // PAIRED ENTITY INFORMATION
     pm["pairedMachineName"] = query.value("paired_machine_name").toString();
     pm["pairedCurrentPosition"] = query.value("paired_current_position").toString();
     pm["pairedCurrentPositionName"] = query.value("paired_current_position_name").toString();
     pm["pairedOperatingStatus"] = query.value("paired_operating_status").toString();
     pm["pairedIsLocked"] = query.value("paired_is_locked").toBool();
 
-    //   RESOURCE LOCK STATUS
-    pm["isRouteLocked"] = query.value("is_route_locked").toBool();
-    pm["lockedByRouteId"] = query.value("locked_by_route_id").toString();
-    pm["routeLockType"] = query.value("route_lock_type").toString();
-    pm["routeLockedAt"] = query.value("route_locked_at").toString();
-    pm["routeLockedBy"] = query.value("route_locked_by").toString();
-    pm["routeLockExpiresAt"] = query.value("route_lock_expires_at").toString();
+    // REMOVED: Resource lock status fields (no longer available)
+    // pm["isRouteLocked"] = query.value("is_route_locked").toBool();
+    // pm["lockedByRouteId"] = query.value("locked_by_route_id").toString();
+    // pm["routeLockType"] = query.value("route_lock_type").toString();
+    // pm["routeLockedAt"] = query.value("route_locked_at").toString();
+    // pm["routeLockedBy"] = query.value("route_locked_by").toString();
+    // pm["routeLockExpiresAt"] = query.value("route_lock_expires_at").toString();
 
-    //   ROUTE ASSIGNMENT CONTEXT
+    // SIMPLIFIED: Route locking status based on existing data
+    pm["isRouteLocked"] = !query.value("route_state").toString().isEmpty();
+
+    // ROUTE ASSIGNMENT CONTEXT
     pm["routeSourceSignal"] = query.value("route_source_signal").toString();
     pm["routeDestSignal"] = query.value("route_dest_signal").toString();
     pm["routeState"] = query.value("route_state").toString();
     pm["routeDirection"] = query.value("route_direction").toString();
 
-    //   STATUS FIELDS
+    // STATUS FIELDS
     pm["pairedSyncStatus"] = query.value("paired_sync_status").toString();
     pm["availabilityStatus"] = query.value("availability_status").toString();
     pm["isActive"] = query.value("availability_status").toString() != "FAILED" &&
                      query.value("availability_status").toString() != "MAINTENANCE";
 
-    //   PERFORMANCE METRICS
+    // PERFORMANCE METRICS
     QVariant avgTime = query.value("avg_time_between_operations_seconds");
     pm["avgTimeBetweenOperations"] = avgTime.isNull() ? QVariant() : avgTime.toDouble();
 
-    //   TIMESTAMPS
+    // TIMESTAMPS
     pm["createdAt"] = query.value("created_at").toString();
     pm["updatedAt"] = query.value("updated_at").toString();
 
-    //   JUNCTION POINT
+    // JUNCTION POINT
     QVariantMap junctionPoint;
     junctionPoint["row"] = query.value("junction_row").toDouble();
     junctionPoint["col"] = query.value("junction_col").toDouble();
     pm["junctionPoint"] = junctionPoint;
 
-    //   TRACK SEGMENT CONNECTIONS (parse JSON)
+    // TRACK SEGMENT CONNECTIONS (parse JSON)
     QString rootConnStr = query.value("root_track_segment_connection").toString();
     QString normalConnStr = query.value("normal_track_segment_connection").toString();
     QString reverseConnStr = query.value("reverse_track_segment_connection").toString();
@@ -2115,7 +2142,7 @@ QVariantMap DatabaseManager::convertPointMachineRowToVariant(const QSqlQuery& qu
         pm["reverseTrackSegment"] = reverseDoc.object().toVariantMap();
     }
 
-    //   HANDLE POSTGRESQL ARRAYS
+    // HANDLE POSTGRESQL ARRAYS
     // Convert safety_interlocks array (integers)
     QString interlocksStr = query.value("safety_interlocks").toString();
     if (!interlocksStr.isEmpty()) {

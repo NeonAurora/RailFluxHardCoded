@@ -679,63 +679,43 @@ bool DatabaseInitializer::createIndexes() {
     qDebug() << "Creating performance and safety indexes...";
 
     QStringList indexes = {
-        // Track circuits indexes
+        // Track circuits indexes (KEEP)
         "CREATE INDEX idx_track_circuits_id ON railway_control.track_circuits(circuit_id)",
         "CREATE INDEX idx_track_circuits_occupied ON railway_control.track_circuits(is_occupied) WHERE is_occupied = TRUE",
         "CREATE INDEX idx_track_circuits_active ON railway_control.track_circuits(is_active) WHERE is_active = TRUE",
         "CREATE INDEX idx_track_circuits_assigned ON railway_control.track_circuits(is_assigned) WHERE is_assigned = TRUE",
         "CREATE INDEX idx_track_circuits_overlap ON railway_control.track_circuits(is_overlap) WHERE is_overlap = TRUE",
 
-        // Track segments indexes
+        // Track segments indexes (KEEP)
         "CREATE INDEX idx_track_segments_id ON railway_control.track_segments(segment_id)",
         "CREATE INDEX idx_track_segments_circuit ON railway_control.track_segments(circuit_id)",
         "CREATE INDEX idx_track_segments_location ON railway_control.track_segments USING btree(start_row, start_col, end_row, end_col)",
         "CREATE INDEX idx_track_segments_assigned ON railway_control.track_segments(is_assigned) WHERE is_assigned = TRUE",
         "CREATE INDEX idx_track_segments_overlap ON railway_control.track_segments(is_overlap) WHERE is_overlap = TRUE",
-        "CREATE INDEX idx_signals_locked ON railway_control.signals(is_locked) WHERE is_locked = TRUE",
 
-        // Signal indexes (including route assignment)
+        // Signal indexes (KEEP)
         "CREATE INDEX idx_signals_id ON railway_control.signals(signal_id)",
         "CREATE INDEX idx_signals_location ON railway_control.signals USING btree(location_row, location_col)",
         "CREATE INDEX idx_signals_type ON railway_control.signals(signal_type_id)",
         "CREATE INDEX idx_signals_active ON railway_control.signals(is_active) WHERE is_active = TRUE",
         "CREATE INDEX idx_signals_preceded_by ON railway_control.signals(preceded_by_circuit_id) WHERE preceded_by_circuit_id IS NOT NULL",
         "CREATE INDEX idx_signals_succeeded_by ON railway_control.signals(succeeded_by_circuit_id) WHERE succeeded_by_circuit_id IS NOT NULL",
+        "CREATE INDEX idx_signals_locked ON railway_control.signals(is_locked) WHERE is_locked = TRUE",
 
-        // Point machine indexes
+        // Point machine indexes (KEEP)
         "CREATE INDEX idx_point_machines_id ON railway_control.point_machines(machine_id)",
         "CREATE INDEX idx_point_machines_position ON railway_control.point_machines(current_position_id)",
         "CREATE INDEX idx_point_machines_junction ON railway_control.point_machines USING btree(junction_row, junction_col)",
         "CREATE INDEX idx_point_machines_paired_entity ON railway_control.point_machines(paired_entity) WHERE paired_entity IS NOT NULL",
         "CREATE INDEX idx_point_machines_host_track_circuit ON railway_control.point_machines(host_track_circuit)",
 
-        // Route assignment indexes
-        "CREATE INDEX idx_track_circuit_edges_from ON railway_control.track_circuit_edges(from_circuit_id) WHERE is_active = TRUE",
-        "CREATE INDEX idx_track_circuit_edges_to ON railway_control.track_circuit_edges(to_circuit_id) WHERE is_active = TRUE",
-        "CREATE INDEX idx_track_circuit_edges_condition ON railway_control.track_circuit_edges(condition_point_machine_id) WHERE condition_point_machine_id IS NOT NULL",
-
+        // Route assignment indexes (KEEP - only for remaining tables)
         "CREATE INDEX idx_route_assignments_state ON railway_control.route_assignments(state)",
         "CREATE INDEX idx_route_assignments_active ON railway_control.route_assignments(state) WHERE state IN ('RESERVED', 'ACTIVE')",
         "CREATE INDEX idx_route_assignments_signals ON railway_control.route_assignments(source_signal_id, dest_signal_id)",
         "CREATE INDEX idx_route_assignments_created ON railway_control.route_assignments(created_at)",
 
-        // Resource lock indexes (including unique constraint)
-        "CREATE UNIQUE INDEX idx_resource_locks_unique_active ON railway_control.resource_locks(resource_type, resource_id) WHERE is_active = TRUE",
-        "CREATE INDEX idx_resource_locks_route_active ON railway_control.resource_locks(route_id, is_active) WHERE is_active = TRUE",
-        "CREATE INDEX idx_resource_locks_route ON railway_control.resource_locks(route_id)",
-        "CREATE INDEX idx_resource_locks_expires_active ON railway_control.resource_locks(expires_at, is_active) WHERE expires_at IS NOT NULL AND is_active = TRUE",
-        "CREATE INDEX idx_resource_locks_conflict_check ON railway_control.resource_locks(resource_type, resource_id, lock_type, is_active)",
-        "CREATE INDEX idx_resource_locks_released_at ON railway_control.resource_locks(released_at) WHERE released_at IS NOT NULL",
-        "CREATE INDEX idx_resource_locks_released_by ON railway_control.resource_locks(released_by, released_at) WHERE released_by IS NOT NULL",
-        "CREATE INDEX idx_resource_locks_acquired_by ON railway_control.resource_locks(acquired_by, acquired_at)",
-        "CREATE INDEX idx_resource_locks_lock_type ON railway_control.resource_locks(lock_type, is_active) WHERE is_active = TRUE",
-        "CREATE INDEX idx_resource_locks_duration_analysis ON railway_control.resource_locks(acquired_at, released_at, lock_type) WHERE released_at IS NOT NULL"
-
-        // Route events indexes
-        "CREATE INDEX idx_route_events_route_time ON railway_control.route_events(route_id, occurred_at)",
-        "CREATE INDEX idx_route_events_sequence ON railway_control.route_events(sequence_number)",
-
-        // Audit indexes
+        // Audit indexes (KEEP)
         "CREATE INDEX idx_event_log_timestamp ON railway_audit.event_log(event_timestamp)",
         "CREATE INDEX idx_event_log_entity ON railway_audit.event_log(entity_type, entity_id)",
         "CREATE INDEX idx_event_log_operator ON railway_audit.event_log(operator_id)",
@@ -743,20 +723,18 @@ bool DatabaseInitializer::createIndexes() {
         "CREATE INDEX idx_event_log_sequence ON railway_audit.event_log(sequence_number)",
         "CREATE INDEX idx_event_log_date ON railway_audit.event_log(event_date)",
 
-        // GIN indexes for array and JSONB columns
+        // GIN indexes for array and JSONB columns (KEEP)
         "CREATE INDEX idx_signals_possible_aspects ON railway_control.signals USING gin(possible_aspects)",
         "CREATE INDEX idx_signals_protected_circuits ON railway_control.signals USING gin(protected_track_circuits)",
         "CREATE INDEX idx_track_circuits_protecting_signals ON railway_control.track_circuits USING gin(protecting_signals)",
         "CREATE INDEX idx_point_machines_safety_interlocks ON railway_control.point_machines USING gin(safety_interlocks)",
         "CREATE INDEX idx_event_log_old_values ON railway_audit.event_log USING gin(old_values)",
-        "CREATE INDEX idx_event_log_new_values ON railway_audit.event_log USING gin(new_values)",
-        "CREATE INDEX idx_route_assignments_circuits ON railway_control.route_assignments USING gin(assigned_circuits)",
-        "CREATE INDEX idx_route_assignments_overlap ON railway_control.route_assignments USING gin(overlap_circuits)"
+        "CREATE INDEX idx_event_log_new_values ON railway_audit.event_log USING gin(new_values)"
     };
 
     for (const QString& query : indexes) {
         if (!executeQuery(query)) {
-            qWarning() << "Failed to create index (continuing):" << query.left(80);
+            qWarning() << "Failed to create index:" << query.left(100) + "...";
         }
     }
 
@@ -1623,278 +1601,293 @@ bool DatabaseInitializer::createViews() {
     qDebug() << "Creating database views...";
 
     QStringList views = {
-        // Enhanced track segments with complete route assignment integration
-    R"(CREATE OR REPLACE VIEW railway_control.v_track_segments_with_occupancy AS
-    SELECT
-        -- Basic segment information
-        ts.id,
-        ts.segment_id,
-        ts.segment_name,
-        ts.start_row,
-        ts.start_col,
-        ts.end_row,
-        ts.end_col,
-        ts.track_segment_type,
-        ts.is_assigned,
-        ts.is_overlap,
-        ts.circuit_id,
-        ts.length_meters,
-        ts.max_speed_kmh,
-        ts.is_active,
-        ts.protecting_signals,
-        ts.created_at,
-        ts.updated_at,
+        // Simplified track segments view (REMOVED all resource_locks references)
+        R"(CREATE OR REPLACE VIEW railway_control.v_track_segments_with_occupancy AS
+        SELECT
+            -- Basic segment information
+            ts.id,
+            ts.segment_id,
+            ts.segment_name,
+            ts.start_row,
+            ts.start_col,
+            ts.end_row,
+            ts.end_col,
+            ts.track_segment_type,
+            ts.is_assigned,
+            ts.is_overlap,
+            ts.circuit_id,
+            ts.length_meters,
+            ts.max_speed_kmh,
+            ts.is_active,
+            ts.protecting_signals,
+            ts.created_at,
+            ts.updated_at,
 
-        -- Circuit occupancy information
-        COALESCE(tc.is_occupied, false) as is_occupied,
-        COALESCE(tc.is_assigned, false) as circuit_is_assigned,
-        COALESCE(tc.is_overlap, false) as circuit_is_overlap,
-        tc.occupied_by,
-        tc.last_changed_at as occupancy_changed_at,
+            -- Circuit occupancy information
+            COALESCE(tc.is_occupied, false) as is_occupied,
+            COALESCE(tc.is_assigned, false) as circuit_is_assigned,
+            COALESCE(tc.is_overlap, false) as circuit_is_overlap,
+            tc.occupied_by,
+            tc.last_changed_at as occupancy_changed_at,
 
-        -- Simplified circuit information (matching new schema)
-        tc.circuit_name,
-        tc.length_meters as circuit_length_meters,
-        tc.max_speed_kmh as circuit_max_speed_kmh,
-        tc.protecting_signals as circuit_protecting_signals,
+            -- Simplified circuit information (matching new schema)
+            tc.circuit_name,
+            tc.length_meters as circuit_length_meters,
+            tc.max_speed_kmh as circuit_max_speed_kmh,
+            tc.protecting_signals as circuit_protecting_signals,
 
-        -- Route assignment status
-        rl.is_active as is_route_locked,
-        rl.lock_type as route_lock_type,
-        rl.acquired_at as route_locked_at,
-        rl.acquired_by as route_locked_by,
-        rl.expires_at as route_lock_expires_at,
+            -- REMOVED ALL ROUTE LOCK FIELDS (no more resource_locks table):
+            -- rl.is_active as is_route_locked,
+            -- rl.lock_type as route_lock_type,
+            -- rl.acquired_at as route_locked_at,
+            -- rl.acquired_by as route_locked_by,
+            -- rl.expires_at as route_lock_expires_at,
 
-        -- Route context
-        ra.id as route_id,
-        ra.source_signal_id as route_source_signal,
-        ra.dest_signal_id as route_dest_signal,
-        ra.state as route_state,
-        ra.direction as route_direction,
-        ra.priority as route_priority,
-        ra.created_at as route_created_at,
+            -- Route context (direct from route_assignments, no resource_locks bridge)
+            ra.id as route_id,
+            ra.source_signal_id as route_source_signal,
+            ra.dest_signal_id as route_dest_signal,
+            ra.state as route_state,
+            ra.direction as route_direction,
+            ra.priority as route_priority,
+            ra.created_at as route_created_at,
 
-        -- Simplified availability status
-        CASE
-            WHEN NOT ts.is_active THEN 'INACTIVE'
-            WHEN tc.is_occupied = true THEN 'OCCUPIED'
-            WHEN tc.is_assigned = true THEN 'ROUTE_ASSIGNED'
-            WHEN tc.is_overlap = true THEN 'OVERLAP_ASSIGNED'
-            WHEN ts.is_assigned = true THEN 'ASSIGNED'
-            WHEN rl.is_active = true THEN 'ROUTE_LOCKED'
-            WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN 'NO_CIRCUIT'
-            ELSE 'AVAILABLE'
-        END as availability_status,
+            -- Simplified availability status (NO resource_locks references)
+            CASE
+                WHEN NOT ts.is_active THEN 'INACTIVE'
+                WHEN tc.is_occupied = true THEN 'OCCUPIED'
+                WHEN tc.is_assigned = true THEN 'ROUTE_ASSIGNED'
+                WHEN tc.is_overlap = true THEN 'OVERLAP_ASSIGNED'
+                WHEN ts.is_assigned = true THEN 'ASSIGNED'
+                WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN 'NO_CIRCUIT'
+                ELSE 'AVAILABLE'
+            END as availability_status,
 
-        -- Route assignment eligibility
-        CASE
-            WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN false
-            WHEN NOT ts.is_active OR NOT tc.is_active THEN false
-            WHEN tc.is_occupied = true OR ts.is_assigned = true OR rl.is_active = true THEN false
-            ELSE true
-        END as route_assignment_eligible
+            -- Route assignment eligibility (simplified, no resource_locks)
+            CASE
+                WHEN tc.circuit_id = 'INVALID' OR tc.circuit_id IS NULL THEN false
+                WHEN NOT ts.is_active OR NOT tc.is_active THEN false
+                WHEN tc.is_occupied = true OR ts.is_assigned = true THEN false
+                ELSE true
+            END as route_assignment_eligible
 
-    FROM railway_control.track_segments ts
-    LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
-    LEFT JOIN railway_control.route_assignments ra ON (
-        rl.route_id = ra.id
-        AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
-    ))",
+        FROM railway_control.track_segments ts
+        LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
+        -- REMOVED resource_locks JOIN entirely
+        -- Direct join to route_assignments if circuit is in an active route
+        LEFT JOIN railway_control.route_assignments ra ON (
+            tc.circuit_id = ANY(ra.assigned_circuits)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
+        ))",
 
-        // Enhanced track segment occupancy summary with route assignment metrics
-    R"(CREATE OR REPLACE VIEW railway_control.v_track_segment_occupancy AS
-    SELECT
-        -- Basic segment metrics
-        COUNT(DISTINCT ts.segment_id) as total_segments,
-        COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true) as occupied_count,
-        COUNT(DISTINCT ts.segment_id) FILTER (WHERE ts.is_assigned = true) as assigned_count,
-        COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true) as unavailable_count,
+        // Simplified track segment occupancy summary (REMOVED resource_locks metrics)
+        R"(CREATE OR REPLACE VIEW railway_control.v_track_segment_occupancy AS
+        SELECT
+            -- Basic segment metrics
+            COUNT(DISTINCT ts.segment_id) as total_segments,
+            COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true) as occupied_count,
+            COUNT(DISTINCT ts.segment_id) FILTER (WHERE ts.is_assigned = true) as assigned_count,
+            COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true) as unavailable_count,
 
-        -- Route assignment metrics
-        COUNT(DISTINCT ts.segment_id) FILTER (WHERE rl.is_active = true) as route_locked_count,
-        COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true OR rl.is_active = true) as total_unavailable_count,
+            -- REMOVED route assignment metrics that depended on resource_locks:
+            -- COUNT(DISTINCT ts.segment_id) FILTER (WHERE rl.is_active = true) as route_locked_count,
+            -- COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true OR rl.is_active = true) as total_unavailable_count,
 
-        -- Utilization percentages
-        ROUND(
-            (COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true OR rl.is_active = true)::NUMERIC /
-             COUNT(DISTINCT ts.segment_id)) * 100,
-            2
-        ) as total_utilization_percentage,
+            -- Simplified utilization percentages (no resource_locks)
+            ROUND(
+                (COUNT(DISTINCT ts.segment_id) FILTER (WHERE tc.is_occupied = true OR ts.is_assigned = true)::NUMERIC /
+                 COUNT(DISTINCT ts.segment_id)) * 100,
+                2
+            ) as total_utilization_percentage,
 
-        -- Active routes count
-        COUNT(DISTINCT ra.id) as active_routes_count,
+            -- Active routes count (direct count, no resource_locks bridge)
+            COUNT(DISTINCT ra.id) as active_routes_count,
 
-        -- Speed and length metrics (from circuit data)
-        AVG(tc.length_meters) as avg_circuit_length_meters,
-        AVG(tc.max_speed_kmh) as avg_circuit_max_speed_kmh
+            -- Speed and length metrics (from circuit data)
+            AVG(tc.length_meters) as avg_circuit_length_meters,
+            AVG(tc.max_speed_kmh) as avg_circuit_max_speed_kmh
 
-    FROM railway_control.track_segments ts
-    LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
-    LEFT JOIN railway_control.route_assignments ra ON (
-        rl.route_id = ra.id
-        AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
-    )
-    WHERE ts.is_active = TRUE)",
+        FROM railway_control.track_segments ts
+        LEFT JOIN railway_control.track_circuits tc ON ts.circuit_id = tc.circuit_id
+        -- REMOVED resource_locks JOIN entirely
+        -- Direct join to route_assignments if circuit is in an active route
+        LEFT JOIN railway_control.route_assignments ra ON (
+            tc.circuit_id = ANY(ra.assigned_circuits)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
+        )
+        WHERE ts.is_active = TRUE)",
 
-        // Complete signal information with route assignment
-    R"(CREATE OR REPLACE VIEW railway_control.v_signals_complete AS
-    SELECT
-        s.id,
-        s.signal_id,
-        s.signal_name,
-        st.type_code as signal_type,
-        st.type_name as signal_type_name,
-        s.location_row,
-        s.location_col,
-        s.direction,
-        s.is_locked,
+        // Complete signal information - THIS ONE WAS ALREADY OK (no resource_locks references)
+        R"(CREATE OR REPLACE VIEW railway_control.v_signals_complete AS
+        SELECT
+            s.id,
+            s.signal_id,
+            s.signal_name,
+            st.type_code as signal_type,
+            st.type_name as signal_type_name,
+            s.location_row,
+            s.location_col,
+            s.direction,
+            s.is_locked,
 
-        sa_main.aspect_code as current_aspect,
-        sa_main.aspect_name as current_aspect_name,
-        sa_main.color_code as current_aspect_color,
-        COALESCE(sa_calling.aspect_code, 'OFF') as calling_on_aspect,
-        COALESCE(sa_calling.aspect_name, 'Off/Dark') as calling_on_aspect_name,
-        COALESCE(sa_calling.color_code, '#404040') as calling_on_aspect_color,
-        COALESCE(sa_loop.aspect_code, 'OFF') as loop_aspect,
-        COALESCE(sa_loop.aspect_name, 'Off/Dark') as loop_aspect_name,
-        COALESCE(sa_loop.color_code, '#404040') as loop_aspect_color,
-        s.loop_signal_configuration,
-        s.aspect_count,
-        s.possible_aspects,
-        s.is_active,
-        s.location_description,
-        s.last_changed_at,
-        s.last_changed_by,
-        s.interlocked_with,
-        s.protected_track_circuits,
-        s.manual_control_active,
-        s.preceded_by_circuit_id,
-        s.succeeded_by_circuit_id,
-        s.is_route_signal,
-        s.route_signal_type,
-        s.created_at,
-        s.updated_at
-    FROM railway_control.signals s
-    JOIN railway_config.signal_types st ON s.signal_type_id = st.id
-    LEFT JOIN railway_config.signal_aspects sa_main ON s.current_aspect_id = sa_main.id
-    LEFT JOIN railway_config.signal_aspects sa_calling ON s.calling_on_aspect_id = sa_calling.id
-    LEFT JOIN railway_config.signal_aspects sa_loop ON s.loop_aspect_id = sa_loop.id)",
+            sa_main.aspect_code as current_aspect,
+            sa_main.aspect_name as current_aspect_name,
+            sa_main.color_code as current_aspect_color,
+            COALESCE(sa_calling.aspect_code, 'OFF') as calling_on_aspect,
+            COALESCE(sa_calling.aspect_name, 'Off/Dark') as calling_on_aspect_name,
+            COALESCE(sa_calling.color_code, '#404040') as calling_on_aspect_color,
+            COALESCE(sa_loop.aspect_code, 'OFF') as loop_aspect,
+            COALESCE(sa_loop.aspect_name, 'Off/Dark') as loop_aspect_name,
+            COALESCE(sa_loop.color_code, '#404040') as loop_aspect_color,
+            s.loop_signal_configuration,
+            s.aspect_count,
+            s.possible_aspects,
+            s.is_active,
+            s.location_description,
+            s.last_changed_at,
+            s.last_changed_by,
+            s.interlocked_with,
+            s.protected_track_circuits,
+            s.manual_control_active,
+            s.preceded_by_circuit_id,
+            s.succeeded_by_circuit_id,
+            s.is_route_signal,
+            s.route_signal_type,
+            s.created_at,
+            s.updated_at
+        FROM railway_control.signals s
+        JOIN railway_config.signal_types st ON s.signal_type_id = st.id
+        LEFT JOIN railway_config.signal_aspects sa_main ON s.current_aspect_id = sa_main.id
+        LEFT JOIN railway_config.signal_aspects sa_calling ON s.calling_on_aspect_id = sa_calling.id
+        LEFT JOIN railway_config.signal_aspects sa_loop ON s.loop_aspect_id = sa_loop.id)",
 
-        // Complete point machine information view with route assignment integration
-    R"(CREATE OR REPLACE VIEW railway_control.v_point_machines_complete AS
-    SELECT
-        -- Basic point machine information
-        pm.id,
-        pm.machine_id,
-        pm.machine_name,
-        pm.junction_row,
-        pm.junction_col,
-        pm.root_track_segment_connection,
-        pm.normal_track_segment_connection,
-        pm.reverse_track_segment_connection,
+        // Point machines complete view (REMOVED resource_locks subquery)
+        R"(CREATE OR REPLACE VIEW railway_control.v_point_machines_complete AS
+        SELECT
+            -- Basic point machine information
+            pm.id,
+            pm.machine_id,
+            pm.machine_name,
+            pm.junction_row,
+            pm.junction_col,
+            pm.root_track_segment_connection,
+            pm.normal_track_segment_connection,
+            pm.reverse_track_segment_connection,
 
-        -- Position information (enhanced)
-        pp.position_code as current_position,
-        pp.position_name as current_position_name,
-        pp.description as position_description,
-        pp.pathfinding_weight as position_pathfinding_weight,
-        pp.transition_time_ms as position_default_transition_time_ms,
+            -- Position information (enhanced)
+            pp.position_code as current_position,
+            pp.position_name as current_position_name,
+            pp.description as position_description,
+            pp.pathfinding_weight as position_pathfinding_weight,
+            pp.transition_time_ms as position_default_transition_time_ms,
 
-        -- Operational status and timing
-        pm.operating_status,
-        pm.transition_time_ms,
-        pm.last_operated_at,
-        pm.last_operated_by,
-        pm.operation_count,
+            -- Operational status and timing
+            pm.operating_status,
+            pm.transition_time_ms,
+            pm.last_operated_at,
+            pm.last_operated_by,
+            pm.operation_count,
 
-        -- Locking and safety
-        pm.is_locked,
-        pm.lock_reason,
-        pm.safety_interlocks,
-        pm.protected_signals,
+            -- Locking and safety
+            pm.is_locked,
+            pm.lock_reason,
+            pm.safety_interlocks,
+            pm.protected_signals,
 
-        -- Route assignment extensions
-        pm.paired_entity,
-        pm.host_track_circuit,
-        pm.route_locking_enabled,
-        pm.auto_normalize_after_route,
+            -- Route assignment extensions
+            pm.paired_entity,
+            pm.host_track_circuit,
+            pm.route_locking_enabled,
+            pm.auto_normalize_after_route,
 
-        -- Paired entity information
-        paired_pm.machine_name as paired_machine_name,
-        paired_pp.position_code as paired_current_position,
-        paired_pp.position_name as paired_current_position_name,
-        paired_pm.operating_status as paired_operating_status,
-        paired_pm.is_locked as paired_is_locked,
+            -- Paired entity information
+            paired_pm.machine_name as paired_machine_name,
+            paired_pp.position_code as paired_current_position,
+            paired_pp.position_name as paired_current_position_name,
+            paired_pm.operating_status as paired_operating_status,
+            paired_pm.is_locked as paired_is_locked,
 
-        -- Route assignment context
-        ra.source_signal_id as route_source_signal,
-        ra.dest_signal_id as route_dest_signal,
-        ra.state as route_state,
-        ra.direction as route_direction,
+            -- Route assignment context (direct from route_assignments)
+            ra.source_signal_id as route_source_signal,
+            ra.dest_signal_id as route_dest_signal,
+            ra.state as route_state,
+            ra.direction as route_direction,
 
-        -- Position synchronization status (for paired machines)
-        CASE
-            WHEN pm.paired_entity IS NULL THEN 'NOT_PAIRED'
-            WHEN pp.position_code = paired_pp.position_code THEN 'SYNCHRONIZED'
-            WHEN pp.position_code != paired_pp.position_code THEN 'POSITION_MISMATCH'
-            ELSE 'UNKNOWN'
-        END as paired_sync_status,
+            -- Position synchronization status (for paired machines)
+            CASE
+                WHEN pm.paired_entity IS NULL THEN 'NOT_PAIRED'
+                WHEN pp.position_code = paired_pp.position_code THEN 'SYNCHRONIZED'
+                WHEN pp.position_code != paired_pp.position_code THEN 'POSITION_MISMATCH'
+                ELSE 'UNKNOWN'
+            END as paired_sync_status,
 
-        -- Availability for route assignment
-        CASE
-            WHEN pm.operating_status = 'FAILED' THEN 'FAILED'
-            WHEN pm.operating_status = 'MAINTENANCE' THEN 'MAINTENANCE'
-            WHEN pm.operating_status = 'IN_TRANSITION' THEN 'IN_TRANSITION'
-            WHEN pm.is_locked OR EXISTS(
-                SELECT 1 FROM railway_control.resource_locks rl2
-                WHERE rl2.resource_type = 'POINT_MACHINE'
-                AND rl2.resource_id = pm.machine_id
-                AND rl2.is_active = TRUE
-            ) THEN 'LOCKED'
-            WHEN pm.paired_entity IS NOT NULL AND pp.position_code != paired_pp.position_code THEN 'POSITION_MISMATCH'
-            ELSE 'AVAILABLE'
-        END as availability_status,
+            -- Simplified availability for route assignment (NO resource_locks subquery)
+            CASE
+                WHEN pm.operating_status = 'FAILED' THEN 'FAILED'
+                WHEN pm.operating_status = 'MAINTENANCE' THEN 'MAINTENANCE'
+                WHEN pm.operating_status = 'IN_TRANSITION' THEN 'IN_TRANSITION'
+                WHEN pm.is_locked THEN 'LOCKED'
+                -- REMOVED this condition (resource_locks table doesn't exist):
+                -- OR EXISTS(SELECT 1 FROM railway_control.resource_locks rl2 WHERE rl2.resource_type = 'POINT_MACHINE' AND rl2.resource_id = pm.machine_id AND rl2.is_active = TRUE)
+                WHEN pm.paired_entity IS NOT NULL AND pp.position_code != paired_pp.position_code THEN 'POSITION_MISMATCH'
+                ELSE 'AVAILABLE'
+            END as availability_status,
 
-        -- Performance metrics
-        CASE
-            WHEN pm.operation_count > 0 THEN
-                EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - pm.created_at)) / pm.operation_count
-            ELSE NULL
-        END as avg_time_between_operations_seconds,
+            -- Performance metrics
+            CASE
+                WHEN pm.operation_count > 0 THEN
+                    EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - pm.created_at)) / pm.operation_count
+                ELSE NULL
+            END as avg_time_between_operations_seconds,
 
-        -- Timestamps
-        pm.created_at,
-        pm.updated_at
+            -- Timestamps
+            pm.created_at,
+            pm.updated_at
 
-    FROM railway_control.point_machines pm
-    LEFT JOIN railway_config.point_positions pp ON pm.current_position_id = pp.id
+        FROM railway_control.point_machines pm
+        LEFT JOIN railway_config.point_positions pp ON pm.current_position_id = pp.id
 
-    -- Paired machine information
-    LEFT JOIN railway_control.point_machines paired_pm ON pm.paired_entity = paired_pm.machine_id
-    LEFT JOIN railway_config.point_positions paired_pp ON paired_pm.current_position_id = paired_pp.id
+        -- Paired machine information
+        LEFT JOIN railway_control.point_machines paired_pm ON pm.paired_entity = paired_pm.machine_id
+        LEFT JOIN railway_config.point_positions paired_pp ON paired_pm.current_position_id = paired_pp.id
 
-    -- Route assignment information
-    LEFT JOIN railway_control.route_assignments ra ON (
-        rl.route_id = ra.id
-        AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
-    ))",
+        -- Route assignment information (direct join, no resource_locks bridge)
+        LEFT JOIN railway_control.route_assignments ra ON (
+            pm.machine_id = ANY(ra.locked_point_machines)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
+        ))",
 
-        // Recent events view
-    R"(CREATE VIEW railway_audit.v_recent_events AS
-    SELECT
-        el.id,
-        el.event_timestamp,
-        el.event_type,
-        el.entity_type,
-        el.entity_id,
-        el.entity_name,
-        el.operator_id,
-        el.operation_source,
-        el.safety_critical,
-        el.comments
-    FROM railway_audit.event_log el
-    WHERE el.event_timestamp >= (CURRENT_TIMESTAMP - INTERVAL '24 hours')
-    ORDER BY el.event_timestamp DESC)"
+        // Active routes summary (KEEP - this one was fine)
+        R"(CREATE OR REPLACE VIEW railway_control.v_active_routes_summary AS
+        SELECT
+            COUNT(*) as total_active_routes,
+            COUNT(*) FILTER (WHERE state = 'RESERVED') as reserved_routes,
+            COUNT(*) FILTER (WHERE state = 'ACTIVE') as active_routes,
+            COUNT(*) FILTER (WHERE state = 'PARTIALLY_RELEASED') as partially_released_routes,
+            COUNT(*) FILTER (WHERE overlap_release_due_at IS NOT NULL AND overlap_release_due_at <= CURRENT_TIMESTAMP) as expired_overlaps,
+            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) * 1000) as avg_route_age_ms
+        FROM railway_control.route_assignments
+        WHERE state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED'))",
+
+        // Recent events view (KEEP - this one was already clean)
+        R"(CREATE VIEW railway_audit.v_recent_events AS
+        SELECT
+            el.id,
+            el.event_timestamp,
+            el.event_type,
+            el.entity_type,
+            el.entity_id,
+            el.entity_name,
+            el.operator_id,
+            el.operation_source,
+            el.safety_critical,
+            el.comments
+        FROM railway_audit.event_log el
+        WHERE el.event_timestamp >= (CURRENT_TIMESTAMP - INTERVAL '24 hours')
+        ORDER BY el.event_timestamp DESC)"
+
+        // COMPLETELY REMOVED VIEWS:
+        // - v_resource_utilization (was entirely based on resource_locks table)
     };
 
     for (const QString& query : views) {
@@ -1963,12 +1956,6 @@ bool DatabaseInitializer::populateInitialData() {
         // Configuration data first
         if (!populateConfigurationData()) {
             setError("Failed to populate configuration data");
-            return false;
-        }
-
-        // Route configuration data
-        if (!populateRouteConfiguration()) {
-            setError("Failed to populate route configuration");
             return false;
         }
 
@@ -2056,10 +2043,6 @@ bool DatabaseInitializer::populateConfigurationData() {
     return true;
 }
 
-bool DatabaseInitializer::populateRouteConfiguration() {
-    return true;
-}
-
 bool DatabaseInitializer::populateRouteAssignmentData() { return true; }
 
 // Include all the original data population methods here (populateTrackCircuits, populateSignals, etc.)
@@ -2071,10 +2054,18 @@ bool DatabaseInitializer::validateDatabase() {
         "SELECT COUNT(*) FROM railway_control.track_segments",
         "SELECT COUNT(*) FROM railway_control.signals",
         "SELECT COUNT(*) FROM railway_control.point_machines",
+        "SELECT COUNT(*) FROM railway_control.route_assignments",  // Keep this
         "SELECT COUNT(*) FROM railway_config.signal_types",
         "SELECT COUNT(*) FROM railway_config.signal_aspects",
         "SELECT COUNT(*) FROM railway_config.point_positions",
         "SELECT COUNT(*) FROM railway_control.interlocking_rules"
+
+        // REMOVED VALIDATION FOR:
+        // - resource_locks
+        // - route_events
+        // - track_circuit_edges
+        // - overlap_definitions
+        // - route_configuration (if table was removed)
     };
 
     for (const QString& query : validationQueries) {
@@ -2097,10 +2088,7 @@ bool DatabaseInitializer::validateDatabase() {
                 setError("No signal aspects found - critical configuration missing");
                 return false;
             }
-            if (query.contains("route_configuration") && count == 0) {
-                setError("No route configuration found - critical settings missing");
-                return false;
-            }
+            // Remove route_configuration validation if table was removed
         }
     }
 

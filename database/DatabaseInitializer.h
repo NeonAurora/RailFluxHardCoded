@@ -123,7 +123,6 @@ private:
 
     // Configuration data
     bool populateConfigurationData();
-    bool populateRouteConfiguration();
 
     // Track infrastructure with route assignment integration
     bool populateTrackCircuits();
@@ -148,10 +147,6 @@ private:
 
     // Pathfinding infrastructure
     bool populateSignalAdjacencyAnchors();
-    bool populateTrackCircuitEdges();
-
-    // Safety overlap definitions
-    bool populateSignalOverlapDefinitions();
 
     //
     // HELPER METHODS
