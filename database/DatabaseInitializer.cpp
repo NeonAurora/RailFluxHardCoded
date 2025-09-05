@@ -709,7 +709,7 @@ bool DatabaseInitializer::createIndexes() {
         "CREATE INDEX idx_point_machines_paired_entity ON railway_control.point_machines(paired_entity) WHERE paired_entity IS NOT NULL",
         "CREATE INDEX idx_point_machines_host_track_circuit ON railway_control.point_machines(host_track_circuit)",
 
-        // Route assignment indexes (KEEP - only for remaining tables)
+        // Route assignment indexes (KEEP - only for existing tables)
         "CREATE INDEX idx_route_assignments_state ON railway_control.route_assignments(state)",
         "CREATE INDEX idx_route_assignments_active ON railway_control.route_assignments(state) WHERE state IN ('RESERVED', 'ACTIVE')",
         "CREATE INDEX idx_route_assignments_signals ON railway_control.route_assignments(source_signal_id, dest_signal_id)",
@@ -740,6 +740,7 @@ bool DatabaseInitializer::createIndexes() {
 
     return true;
 }
+
 
 bool DatabaseInitializer::createFunctions() {
     qDebug() << "Creating database functions...";
@@ -829,16 +830,20 @@ bool DatabaseInitializer::createFunctions() {
             RAISE EXCEPTION 'Invalid aspect code: %', aspect_code_param;
         END IF;
 
-        -- Check if signal is locked by route assignment
+        -- UPDATED: Check if signal is locked by checking route assignments directly
         SELECT EXISTS(
-            SELECT 1 FROM railway_control.resource_locks rl
-            WHERE rl.resource_type = 'SIGNAL'
-            AND rl.resource_id = signal_id_param
-            AND rl.is_active = TRUE
+            SELECT 1 FROM railway_control.route_assignments ra
+            WHERE (ra.source_signal_id = signal_id_param OR ra.dest_signal_id = signal_id_param)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
         ) INTO route_locked;
 
         IF route_locked THEN
-            RAISE EXCEPTION 'Signal % is locked by route assignment', signal_id_param;
+            RAISE EXCEPTION 'Signal % is locked by active route assignment', signal_id_param;
+        END IF;
+
+        -- Check signal's own lock status
+        IF EXISTS(SELECT 1 FROM railway_control.signals WHERE signal_id = signal_id_param AND is_locked = TRUE) THEN
+            RAISE EXCEPTION 'Signal % is manually locked', signal_id_param;
         END IF;
 
         -- Update signal aspect
@@ -962,16 +967,20 @@ bool DatabaseInitializer::createFunctions() {
             RAISE EXCEPTION 'Invalid position code: %', position_code_param;
         END IF;
 
-        -- Check if point machine is locked by route assignment
+        -- UPDATED: Check if point machine is locked by checking route assignments directly
         SELECT EXISTS(
-            SELECT 1 FROM railway_control.resource_locks rl
-            WHERE rl.resource_type = 'POINT_MACHINE'
-            AND rl.resource_id = machine_id_param
-            AND rl.is_active = TRUE
+            SELECT 1 FROM railway_control.route_assignments ra
+            WHERE machine_id_param = ANY(ra.locked_point_machines)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
         ) INTO route_locked;
 
         IF route_locked THEN
-            RAISE EXCEPTION 'Point machine % is locked by route assignment', machine_id_param;
+            RAISE EXCEPTION 'Point machine % is locked by active route assignment', machine_id_param;
+        END IF;
+
+        -- Check point machine's own lock status
+        IF EXISTS(SELECT 1 FROM railway_control.point_machines WHERE machine_id = machine_id_param AND is_locked = TRUE) THEN
+            RAISE EXCEPTION 'Point machine % is manually locked', machine_id_param;
         END IF;
 
         -- Get current machine info including paired entity
@@ -1092,21 +1101,24 @@ bool DatabaseInitializer::createFunctions() {
         is_locked BOOLEAN;
         is_in_transition BOOLEAN;
         route_locking_enabled BOOLEAN;
+        is_route_locked BOOLEAN;
     BEGIN
         SELECT
-            pm.is_locked OR EXISTS(
-                SELECT 1 FROM railway_control.resource_locks rl
-                WHERE rl.resource_type = 'POINT_MACHINE'
-                AND rl.resource_id = machine_id_param
-                AND rl.is_active = TRUE
-            ),
+            pm.is_locked,
             pm.operating_status = 'IN_TRANSITION',
             pm.route_locking_enabled
         INTO is_locked, is_in_transition, route_locking_enabled
         FROM railway_control.point_machines pm
         WHERE pm.machine_id = machine_id_param;
 
-        RETURN NOT (COALESCE(is_locked, TRUE) OR COALESCE(is_in_transition, TRUE))
+        -- UPDATED: Check if locked by route assignment (no resource_locks table)
+        SELECT EXISTS(
+            SELECT 1 FROM railway_control.route_assignments ra
+            WHERE machine_id_param = ANY(ra.locked_point_machines)
+            AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
+        ) INTO is_route_locked;
+
+        RETURN NOT (COALESCE(is_locked, TRUE) OR COALESCE(is_in_transition, TRUE) OR COALESCE(is_route_locked, TRUE))
                AND COALESCE(route_locking_enabled, TRUE);
     END;
     $$ LANGUAGE plpgsql)",
@@ -1116,32 +1128,22 @@ bool DatabaseInitializer::createFunctions() {
         // 
 
         // Main function for updating track circuit occupancy status
-        R"(CREATE OR REPLACE FUNCTION railway_control.update_track_circuit_occupancy(
-        circuit_id_param VARCHAR,
-        is_occupied_param BOOLEAN,
-        occupied_by_param VARCHAR DEFAULT NULL,
-        operator_id_param VARCHAR DEFAULT 'system'
-    )
-    RETURNS BOOLEAN AS $$
-    DECLARE
-        rows_affected INTEGER;
+        R"(CREATE OR REPLACE FUNCTION railway_control.get_available_circuits()
+    RETURNS TABLE(circuit_id TEXT, is_occupied BOOLEAN, is_locked BOOLEAN, circuit_type TEXT) AS $$
     BEGIN
-        -- Set operator context for audit logging
-        PERFORM set_config('railway.operator_id', operator_id_param, true);
-
-        -- Update track_segment circuit occupancy
-        UPDATE railway_control.track_circuits
-        SET
-            is_occupied = is_occupied_param,
-            occupied_by = CASE
-                WHEN is_occupied_param = TRUE THEN occupied_by_param
-                ELSE NULL
-            END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE circuit_id = circuit_id_param;
-
-        GET DIAGNOSTICS rows_affected = ROW_COUNT;
-        RETURN rows_affected > 0;
+        RETURN QUERY
+        SELECT
+            tc.circuit_id,
+            tc.is_occupied,
+            -- UPDATED: Check if locked by route assignment (no resource_locks table)
+            EXISTS(
+                SELECT 1 FROM railway_control.route_assignments ra
+                WHERE tc.circuit_id = ANY(ra.assigned_circuits)
+                AND ra.state IN ('RESERVED', 'ACTIVE', 'PARTIALLY_RELEASED')
+            ) as is_locked,
+            'TRACK_CIRCUIT'::TEXT as circuit_type  -- UPDATED: Fixed circuit_type reference
+        FROM railway_control.track_circuits tc
+        WHERE tc.is_active = TRUE;
     END;
     $$ LANGUAGE plpgsql)",
 
@@ -1444,88 +1446,70 @@ bool DatabaseInitializer::createFunctions() {
 
         // Main audit logging trigger for all safety-critical operations
         R"(CREATE OR REPLACE FUNCTION railway_audit.log_changes()
-    RETURNS TRIGGER AS $$
-    DECLARE
-        entity_name_val VARCHAR(100);
-        old_json JSONB;
-        new_json JSONB;
-        operator_id_val VARCHAR(100);
-        operation_source_val VARCHAR(50);
-    BEGIN
-        -- Determine entity name based on table
-        CASE TG_TABLE_NAME
-            WHEN 'track_segments' THEN
-                entity_name_val := COALESCE(NEW.segment_name, OLD.segment_name, NEW.segment_id, OLD.segment_id);
-            WHEN 'track_circuits' THEN
-                entity_name_val := COALESCE(NEW.circuit_name, OLD.circuit_name, NEW.circuit_id, OLD.circuit_id);
-            WHEN 'signals' THEN
-                entity_name_val := COALESCE(NEW.signal_name, OLD.signal_name, NEW.signal_id, OLD.signal_id);
-            WHEN 'point_machines' THEN
-                entity_name_val := COALESCE(NEW.machine_name, OLD.machine_name, NEW.machine_id, OLD.machine_id);
-            WHEN 'route_assignments' THEN
-                entity_name_val := CONCAT('Route: ', COALESCE(NEW.source_signal_id, OLD.source_signal_id), ' -> ', COALESCE(NEW.dest_signal_id, OLD.dest_signal_id));
-            ELSE
-                entity_name_val := 'Unknown';
-        END CASE;
-
-        -- Convert to JSON for comparison
-        IF TG_OP != 'INSERT' THEN
-            old_json := to_jsonb(OLD);
-        END IF;
-        IF TG_OP != 'DELETE' THEN
-            new_json := to_jsonb(NEW);
-        END IF;
-
-        -- Get context variables with safe defaults
+        RETURNS TRIGGER AS $$
+        DECLARE
+            old_json JSONB := NULL;
+            new_json JSONB := NULL;
+            entity_name_val TEXT;
+            operator_id_val TEXT := current_setting('railway.operator_id', true);
+            operation_source_val TEXT := 'HMI';
         BEGIN
-            operator_id_val := current_setting('railway.operator_id');
-        EXCEPTION WHEN OTHERS THEN
-            operator_id_val := 'system';
-        END;
+            IF TG_OP = 'DELETE' THEN
+                old_json := to_jsonb(OLD);
+            END IF;
 
-        BEGIN
-            operation_source_val := current_setting('railway.operation_source');
-        EXCEPTION WHEN OTHERS THEN
-            operation_source_val := 'HMI';
-        END;
+            IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+                new_json := to_jsonb(NEW);
+            END IF;
 
-        -- Insert audit record
-        INSERT INTO railway_audit.event_log (
-            event_type,
-            entity_type,
-            entity_id,
-            entity_name,
-            old_values,
-            new_values,
-            operator_id,
-            operation_source,
-            safety_critical,
-            replay_data,
-            sequence_number
-        ) VALUES (
-            TG_OP,
-            TG_TABLE_NAME,
-            COALESCE(NEW.id::TEXT, OLD.id::TEXT),
-            entity_name_val,
-            old_json,
-            new_json,
-            operator_id_val,
-            operation_source_val,
+            IF TG_OP = 'UPDATE' THEN
+                old_json := to_jsonb(OLD);
+            END IF;
+
             CASE TG_TABLE_NAME
-                WHEN 'signals' THEN true
-                WHEN 'point_machines' THEN true
-                WHEN 'track_circuits' THEN true
-                WHEN 'route_assignments' THEN true
-                WHEN 'resource_locks' THEN true
-                ELSE false
-            END,
-            COALESCE(new_json, old_json),
-            nextval('railway_audit.event_sequence')
-        );
+                WHEN 'signals' THEN entity_name_val := COALESCE(NEW.signal_name, OLD.signal_name);
+                WHEN 'point_machines' THEN entity_name_val := COALESCE(NEW.machine_name, OLD.machine_name);
+                WHEN 'track_circuits' THEN entity_name_val := COALESCE(NEW.circuit_name, OLD.circuit_name);
+                WHEN 'track_segments' THEN entity_name_val := COALESCE(NEW.segment_name, OLD.segment_name);
+                WHEN 'route_assignments' THEN entity_name_val := COALESCE(NEW.source_signal_id || '→' || NEW.dest_signal_id, OLD.source_signal_id || '→' || OLD.dest_signal_id);
+                ELSE entity_name_val := 'Unknown';
+            END CASE;
 
-        RETURN COALESCE(NEW, OLD);
-    END;
-    $$ LANGUAGE plpgsql)"
+            INSERT INTO railway_audit.event_log (
+                event_type,
+                entity_type,
+                entity_id,
+                entity_name,
+                old_values,
+                new_values,
+                operator_id,
+                operation_source,
+                safety_critical,
+                replay_data,
+                sequence_number
+            ) VALUES (
+                TG_OP,
+                TG_TABLE_NAME,
+                COALESCE(NEW.id::TEXT, OLD.id::TEXT),
+                entity_name_val,
+                old_json,
+                new_json,
+                operator_id_val,
+                operation_source_val,
+                CASE TG_TABLE_NAME
+                    WHEN 'signals' THEN true
+                    WHEN 'point_machines' THEN true
+                    WHEN 'track_circuits' THEN true
+                    WHEN 'route_assignments' THEN true
+                    ELSE false
+                END,
+                COALESCE(new_json, old_json),
+                nextval('railway_audit.event_sequence')
+            );
+
+            RETURN COALESCE(NEW, OLD);
+        END;
+        $$ LANGUAGE plpgsql)"
     };
 
     for (const QString& query : functions) {
@@ -1828,7 +1812,6 @@ bool DatabaseInitializer::createViews() {
                 WHEN pm.operating_status = 'IN_TRANSITION' THEN 'IN_TRANSITION'
                 WHEN pm.is_locked THEN 'LOCKED'
                 -- REMOVED this condition (resource_locks table doesn't exist):
-                -- OR EXISTS(SELECT 1 FROM railway_control.resource_locks rl2 WHERE rl2.resource_type = 'POINT_MACHINE' AND rl2.resource_id = pm.machine_id AND rl2.is_active = TRUE)
                 WHEN pm.paired_entity IS NOT NULL AND pp.position_code != paired_pp.position_code THEN 'POSITION_MISMATCH'
                 ELSE 'AVAILABLE'
             END as availability_status,

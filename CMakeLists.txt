@@ -38,12 +38,6 @@ qt_add_qml_module(appRailFlux
         components/PointMachine.qml
         components/ToastNotification.qml
         components/SignalContextMenu.qml
-
-
-
-
-
-
         components/SignalIndicator.qml
 
     # All C++ source files properly organized
@@ -64,18 +58,6 @@ qt_add_qml_module(appRailFlux
         interlocking/SignalRule.cpp
         interlocking/InterlockingRuleEngine.h
         interlocking/InterlockingRuleEngine.cpp
-
-
-
-
-
-
-
-
-
-
-
-
         route/RouteAssignmentService.h
         route/RouteAssignmentService.cpp
 
@@ -83,7 +65,7 @@ qt_add_qml_module(appRailFlux
 
     # Only non-code resources (SQL files, data files)
     RESOURCES
-    sql/sql_commands_railflux.sql
+
         QML_FILES components/RouteAssignmentDialog.qml
 
 )
